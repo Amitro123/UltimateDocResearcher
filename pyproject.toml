@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "ultimate-doc-researcher"
+version = "0.1.0"
+description = "Autonomous multi-source document collector + autoresearch loop"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+readme = "README.md"
+keywords = ["llm", "fine-tuning", "research", "autoresearch", "rag"]
+dependencies = [
+    "aiohttp>=3.9",
+    "aiofiles>=23.0",
+    "beautifulsoup4>=4.12",
+    "pymupdf>=1.24",
+    "google-api-python-client>=2.120",
+    "google-auth>=2.28",
+    "google-auth-oauthlib>=1.2",
+    "kaggle>=1.6",
+    "openai>=1.30",
+    "tqdm>=4.66",
+    "python-dotenv>=1.0",
+    "pandas>=2.1",
+]
+
+[project.scripts]
+collect = "collector.ultimate_collector:main"
+prepare = "autoresearch.prepare:prepare"
+research = "autoresearch.train:main"
+trigger-kaggle = "api-triggers.trigger_kaggle:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["collector*", "autoresearch*", "api-triggers*", "templates*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

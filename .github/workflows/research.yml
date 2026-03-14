@@ -1,0 +1,147 @@
+name: UltimateDocResearcher — Remote Research
+
+on:
+  # Manual trigger with configurable topic
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Research topic (e.g. 'Claude skills optimization')"
+        required: true
+        default: "Claude skills optimization"
+      iterations:
+        description: "Number of autoresearch iterations"
+        required: true
+        default: "20"
+      model:
+        description: "Base model (Kaggle-compatible)"
+        required: false
+        default: "unsloth/Llama-3.2-3B-Instruct-bnb-4bit"
+      collect_sources:
+        description: "Sources: web,reddit,github (comma-separated)"
+        required: false
+        default: "web,reddit,github"
+
+  # Scheduled weekly run
+  schedule:
+    - cron: "0 3 * * 1"   # Mondays 3 AM UTC
+
+  # On push to 'research' branch
+  push:
+    branches:
+      - research
+
+jobs:
+  # ── Stage 1: Push kernel to Kaggle ────────────────────────────────────────
+  push-kernel:
+    name: Push Kaggle Kernel
+    runs-on: ubuntu-latest
+    outputs:
+      kernel-slug: ${{ steps.push.outputs.slug }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install kaggle aiohttp
+
+      - name: Configure Kaggle credentials
+        run: |
+          mkdir -p ~/.kaggle
+          echo '{"username":"${{ secrets.KAGGLE_USERNAME }}","key":"${{ secrets.KAGGLE_KEY }}"}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+      - name: Generate & push kernel
+        id: push
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python api-triggers/trigger_kaggle.py \
+            --topic "${{ github.event.inputs.topic || 'Claude skills optimization' }}" \
+            --iterations "${{ github.event.inputs.iterations || '20' }}" \
+            --github-repo "${{ github.repository }}" \
+            --kernel-dir templates/kaggle_kernel/ \
+            --poll \
+            --download-results \
+            --results-dir results/
+
+          SLUG="${{ secrets.KAGGLE_USERNAME }}/ultimate-doc-researcher"
+          echo "slug=$SLUG" >> $GITHUB_OUTPUT
+
+  # ── Stage 2: Poll & download results ──────────────────────────────────────
+  collect-results:
+    name: Collect & Commit Results
+    runs-on: ubuntu-latest
+    needs: push-kernel
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install kaggle
+
+      - name: Configure Kaggle credentials
+        run: |
+          mkdir -p ~/.kaggle
+          echo '{"username":"${{ secrets.KAGGLE_USERNAME }}","key":"${{ secrets.KAGGLE_KEY }}"}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+      - name: Download results
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          cd api-triggers
+          python poll_results.py \
+            --slug "${{ needs.push-kernel.outputs.kernel-slug }}" \
+            --poll-interval 30 \
+            --timeout 5 \
+            --results-dir ../results/ \
+            --git-sync || echo "Download attempted"
+
+      - name: Commit results to repo
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add results/ || true
+          git diff --staged --quiet || git commit -m "results: automated run — ${{ github.event.inputs.topic || 'scheduled' }} [skip ci]"
+          git push || true
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-results-${{ github.run_number }}
+          path: results/
+          retention-days: 90
+
+  # ── Stage 3: Notify (optional) ───────────────────────────────────────────
+  notify:
+    name: Notify on Completion
+    runs-on: ubuntu-latest
+    needs: collect-results
+    if: always()
+
+    steps:
+      - name: Summary
+        run: |
+          echo "## 🔬 Research Run Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Topic:** ${{ github.event.inputs.topic || 'scheduled' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Iterations:** ${{ github.event.inputs.iterations || '20' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Run:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Results are available in the \`results/\` directory and as a workflow artifact." >> $GITHUB_STEP_SUMMARY
