@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -55,7 +56,10 @@ class KaggleRunner:
             text=True,
         )
         if check and result.returncode != 0:
-            raise RuntimeError(f"kaggle {' '.join(args)} failed:\n{result.stderr}")
+            msg = f"kaggle {' '.join(args)} failed (exit {result.returncode})"
+            if result.stdout: msg += f"\nSTDOUT: {result.stdout}"
+            if result.stderr: msg += f"\nSTDERR: {result.stderr}"
+            raise RuntimeError(msg)
         return result.stdout.strip()
 
     def push_kernel(self, kernel_dir: str | Path) -> str:
@@ -69,7 +73,13 @@ class KaggleRunner:
             raise FileNotFoundError(f"kernel-metadata.json not found in {kernel_dir}")
 
         meta = json.loads(meta_path.read_text())
-        slug = f"{self.username}/{meta['id']}"
+        meta_id = meta['id']
+        
+        # Avoid double username prefix if metadata already has it
+        if "/" in meta_id:
+            slug = meta_id
+        else:
+            slug = f"{self.username}/{meta_id}"
 
         print(f"[kaggle] Pushing kernel: {slug}")
         output = self._run("kernels", "push", "-p", str(kernel_dir))
@@ -139,70 +149,72 @@ def generate_kernel_notebook(
     cells = [
         _code_cell(f'# UltimateDocResearcher — {topic}'),
         _code_cell(f"""\
-import subprocess, os
+import subprocess, os, sys
+print("🚀 Starting UltimateDocResearcher research loop...")
 
-# Clone repo
+# 1. Clone & Setup
 repo = "{github_repo}"
-if not os.path.exists("ultimate-doc-researcher"):
-    subprocess.run(["git", "clone", f"https://github.com/{{repo}}.git", "ultimate-doc-researcher"], check=True)
-os.chdir("ultimate-doc-researcher")
+print(f"Cloning repo: {{repo}}")
 
-# Configure git for result commits
-subprocess.run(["git", "config", "user.email", "kaggle@autoresearch.bot"], check=True)
-subprocess.run(["git", "config", "user.name", "KaggleBot"], check=True)
-print("✅ Repo cloned")
+if not os.path.exists("ultimate-doc-researcher"):
+    try:
+        subprocess.run(["git", "clone", f"https://github.com/{{repo}}.git", "ultimate-doc-researcher"], check=True)
+    except Exception as e:
+        print(f"❌ Clone failed: {{e}}")
+        # Try fallback if possible or exit
+        raise
+
+os.chdir("ultimate-doc-researcher")
+sys.path.insert(0, ".")
+print("✅ Repo cloned and directoy changed")
 """),
         _code_cell("""\
-# Install dependencies
+# 2. Install Dependencies
+print("📦 Installing dependencies (this may take 2-3 minutes)...")
 subprocess.run([
-    "pip", "install", "-q",
+    "pip", "install", "-q", "--upgrade",
     "unsloth", "trl", "peft", "pymupdf",
     "aiohttp", "beautifulsoup4", "google-api-python-client", "google-auth",
+    "bitsandbytes", "accelerate", "xformers",
 ], check=True)
 print("✅ Dependencies installed")
 """),
         _code_cell(f"""\
-import sys
-sys.path.insert(0, ".")
+# 3. Collect & Prepare
 from collector.ultimate_collector import UltimateCollector
 from autoresearch.prepare import prepare
-from autoresearch.train import TrainConfig, research_loop
+from collector.analyzer import analyze_corpus
 
 TOPIC = "{topic}"
 N_ITERATIONS = {n_iterations}
 
-# ── Step 1: Collect ──────────────────────────────────────────────────────
+print(f"🔍 Collecting documents for: {{TOPIC}}")
 collector = UltimateCollector(
-    google_queries=[
-        f"{{TOPIC}} research paper",
-        f"{{TOPIC}} best practices",
-        f"{{TOPIC}} tutorial",
-    ],
-    reddit_subreddits=["MachineLearning", "LocalLLaMA", "artificial"],
-    github_repos=["karpathy/autoresearch"],
+    google_queries=[f"{{TOPIC}} research paper", f"{{TOPIC}} tutorial"],
+    reddit_subreddits=["MachineLearning", "LocalLLaMA"],
     output_dir="data/",
 )
 docs = collector.run()
-print(f"Collected {{len(docs)}} documents")
-"""),
-        _code_cell("""\
-# ── Step 2: Analyze / clean ─────────────────────────────────────────────
-from collector.analyzer import analyze_corpus
+print(f"✅ Collected {{len(docs)}} documents")
+
+print("🧹 Analyzing and cleaning corpus...")
 report = analyze_corpus("data/all_docs.txt", "data/")
 print(report)
-"""),
-        _code_cell(f"""\
-# ── Step 3: Prepare Q&A pairs ────────────────────────────────────────────
+
+print("📝 Preparing Q&A pairs...")
 prepare(
     corpus_path="data/all_docs_cleaned.txt",
     output_dir="data/",
     program_md="templates/program.md",
     max_pairs=500,
-    use_llm=False,  # set True if OPENAI_API_KEY is available
+    use_llm=False,
 )
+print("✅ Data preparation complete")
 """),
         _code_cell(f"""\
-# ── Step 4: Research loop ─────────────────────────────────────────────────
+# 4. Training Loop
+from autoresearch.train import TrainConfig, train
+
 cfg = TrainConfig(
     model_name="unsloth/Llama-3.2-3B-Instruct-bnb-4bit",
     num_train_epochs=1,
@@ -211,20 +223,25 @@ cfg = TrainConfig(
     results_tsv="/kaggle/working/results.tsv",
 )
 
+print(f"🏋️ Starting research loop ({{N_ITERATIONS}} iterations)...")
 for i in range(N_ITERATIONS):
-    from autoresearch.train import train
     cfg.iteration = i + 1
     metrics = train(cfg)
-    print(f"Iteration {{i+1}}: val_score={{metrics.get('val_score', 'N/A')}}")
+    vs = metrics.get('val_score', 'N/A')
+    print(f"Iteration {{i+1}}/{{N_ITERATIONS}}: val_score={{vs}}")
+
+print("✅ Training sequence complete")
 """),
         _code_cell("""\
-# ── Step 5: Show results ──────────────────────────────────────────────────
+# 5. Export Results
 import pandas as pd
-df = pd.read_csv("/kaggle/working/results.tsv", sep="\\t")
-print(df[["iteration", "val_loss", "val_score", "elapsed_seconds"]])
-df.to_csv("/kaggle/working/results.tsv", sep="\\t", index=False)
-print("✅ Done — results.tsv saved as output")
-"""),
+if os.path.exists("/kaggle/working/results.tsv"):
+    df = pd.read_csv("/kaggle/working/results.tsv", sep="\\t")
+    print(df[["iteration", "val_loss", "val_score", "elapsed_seconds"]])
+    print("✅ Results exported")
+else:
+    print("⚠️ results.tsv not found")
+""")
     ]
 
     notebook = {
@@ -253,6 +270,13 @@ def _code_cell(source: str) -> dict:
         "outputs": [],
         "source": source,
     }
+
+
+def slugify(text: str) -> str:
+    """Convert text to a valid Kaggle ID slug."""
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    return text.strip("-")
 
 
 # ── kernel-metadata.json ──────────────────────────────────────────────────────
@@ -290,7 +314,15 @@ def main():
     parser = argparse.ArgumentParser(description="Trigger Kaggle kernel for autoresearch")
     parser.add_argument("--topic", default="Claude skills optimization")
     parser.add_argument("--iterations", type=int, default=20)
-    parser.add_argument("--github-repo", default="yourusername/ultimate-doc-researcher")
+    
+    # Try to detect current repo
+    try:
+        remote_url = subprocess.check_output(["git", "remote", "get-url", "origin"], text=True).strip()
+        repo_path = remote_url.replace("https://github.com/", "").replace(".git", "")
+    except Exception:
+        repo_path = "yourusername/ultimate-doc-researcher"
+        
+    parser.add_argument("--github-repo", default=repo_path)
     parser.add_argument("--kernel-dir", default="templates/kaggle_kernel/")
     parser.add_argument("--poll", action="store_true", help="Only poll an existing kernel")
     parser.add_argument("--slug", default="", help="Kernel slug for --poll mode")
@@ -311,6 +343,15 @@ def main():
     kernel_dir = Path(args.kernel_dir)
     kernel_dir.mkdir(parents=True, exist_ok=True)
 
+    topic_slug = slugify(args.topic)
+    title = f"UltimateDocResearcher — {args.topic[:50]}"
+    # Append timestamp to avoid 409 Conflict on reused titles/ids
+    kernel_id = slugify(f"doc-researcher-{topic_slug}-{int(time.time())}")
+
+    print(f"[kaggle] Triggering run for topic: {args.topic}")
+    print(f"[kaggle] Kernel title: {title}")
+    print(f"[kaggle] Kernel ID: {kernel_id}")
+
     nb_path = generate_kernel_notebook(
         topic=args.topic,
         n_iterations=args.iterations,
@@ -319,8 +360,8 @@ def main():
     )
 
     generate_kernel_metadata(
-        kernel_id="ultimate-doc-researcher",
-        title=f"UltimateDocResearcher — {args.topic[:50]}",
+        kernel_id=kernel_id,
+        title=title,
         notebook_path="notebook.ipynb",
         username=runner.username,
         output_path=kernel_dir / "kernel-metadata.json",
