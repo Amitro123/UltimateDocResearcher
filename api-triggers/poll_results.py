@@ -10,10 +10,8 @@ Can be run locally or as a GitHub Actions job.
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 
