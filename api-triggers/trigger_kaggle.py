@@ -147,13 +147,13 @@ def generate_kernel_notebook(
       3. Runs the full collect → prepare → train loop
     """
     cells = [
-        _code_cell(f'# UltimateDocResearcher — {topic}'),
+        _code_cell(f'# UltimateDocResearcher — {topic.replace("\n", " ")}'),
         _code_cell(f"""\
 import subprocess, os, sys
 print("🚀 Starting UltimateDocResearcher research loop...")
 
 # 1. Clone & Setup
-repo = "{github_repo}"
+repo = {json.dumps(github_repo)}
 print(f"Cloning repo: {{repo}}")
 
 if not os.path.exists("ultimate-doc-researcher"):
@@ -185,8 +185,8 @@ from collector.ultimate_collector import UltimateCollector
 from autoresearch.prepare import prepare
 from collector.analyzer import analyze_corpus
 
-TOPIC = "{topic}"
-N_ITERATIONS = {n_iterations}
+TOPIC = {json.dumps(topic)}
+N_ITERATIONS = {int(n_iterations)}
 
 print(f"🔍 Collecting documents for: {{TOPIC}}")
 collector = UltimateCollector(
