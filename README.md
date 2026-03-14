@@ -126,7 +126,7 @@ ultimate-doc-researcher/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `KAGGLE_USERNAME` | For remote training | Kaggle username |
-| `KAGGLE_KEY` | For remote training | Kaggle API key |
+| `KAGGLE_API_TOKEN` | For remote training | Kaggle API token |
 | `GITHUB_TOKEN` | For result commits | GitHub PAT |
 | `OPENAI_API_KEY` | Optional | Better Q&A generation in prepare.py |
 | `GOOGLE_API_KEY` | Optional | Google Custom Search |

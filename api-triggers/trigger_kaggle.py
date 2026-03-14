@@ -30,8 +30,11 @@ from typing import Optional
 
 class KaggleRunner:
     def __init__(self, username: Optional[str] = None, key: Optional[str] = None):
-        self.username = username or os.environ["KAGGLE_USERNAME"]
-        self.key = key or os.environ["KAGGLE_KEY"]
+        self.username = username or os.environ.get("KAGGLE_USERNAME")
+        self.key = key or os.environ.get("KAGGLE_KEY") or os.environ.get("KAGGLE_API_TOKEN")
+        
+        if not self.username or not self.key:
+            raise ValueError("Kaggle credentials not found. Set KAGGLE_USERNAME and KAGGLE_KEY/KAGGLE_API_TOKEN.")
         # Kaggle SDK reads from ~/.kaggle/kaggle.json
         self._ensure_credentials()
 

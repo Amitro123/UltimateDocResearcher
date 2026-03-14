@@ -87,7 +87,7 @@ python api-triggers/trigger_kaggle.py \
 | Secret | Description |
 |--------|-------------|
 | `KAGGLE_USERNAME` | Your Kaggle username |
-| `KAGGLE_KEY` | Kaggle API key (from kaggle.com/settings) |
+| `KAGGLE_API_TOKEN` | Kaggle API token |
 | `GITHUB_TOKEN` | Auto-provided by Actions |
 | `OPENAI_API_KEY` | Optional — for LLM Q&A generation |
 | `GOOGLE_API_KEY` | Optional — for Google CSE |
