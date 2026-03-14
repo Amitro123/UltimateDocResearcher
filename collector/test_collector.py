@@ -1,7 +1,12 @@
-import os
 import sys
 import argparse
 from pathlib import Path
+
+# Add project root to sys.path to allow running this script directly
+project_root = str(Path(__file__).resolve().parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from collector.ultimate_collector import Document, PDFCollector
 
 def test_document_cleaning():
