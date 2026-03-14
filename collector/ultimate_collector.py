@@ -85,6 +85,53 @@ class Document:
         return hashlib.sha1((self.url + self.title).encode()).hexdigest()[:12]
 
 
+# ── Source path safety ────────────────────────────────────────────────────────
+
+# Folder names commonly used for personal files — not research sources
+_PERSONAL_FOLDER_NAMES = {
+    "downloads", "documents", "desktop", "pictures", "photos",
+    "videos", "music", "dropbox", "onedrive", "icloud drive",
+    "google drive", "my documents", "my downloads",
+}
+
+
+def _warn_if_personal_folder(path: Path) -> None:
+    """
+    Print a clear warning when --pdf-dir points at a folder that typically
+    contains personal files rather than research documents.
+
+    This doesn't block execution — the user may intentionally have research
+    PDFs there — but it surfaces the risk before the run starts.
+    """
+    folder_name = path.name.lower()
+    parent_name = path.parent.name.lower()
+
+    is_risky = (
+        folder_name in _PERSONAL_FOLDER_NAMES
+        or parent_name in _PERSONAL_FOLDER_NAMES
+        # e.g. C:/Users/Dana/Downloads or ~/Downloads
+        or any(part.lower() in _PERSONAL_FOLDER_NAMES for part in path.parts)
+    )
+
+    if is_risky:
+        print(
+            f"\n⚠️  WARNING: --pdf-dir points at '{path}'\n"
+            f"   This looks like a personal folder, not a research-specific directory.\n"
+            f"   It may contain invoices, contracts, photos, and other personal files\n"
+            f"   that will contaminate your research corpus.\n"
+            f"\n"
+            f"   Recommended: create a dedicated papers/ folder and copy only your\n"
+            f"   research PDFs there before running the collector:\n"
+            f"\n"
+            f"       mkdir papers\n"
+            f"       cp ~/Downloads/my-research-paper.pdf papers/\n"
+            f"       python -m collector.ultimate_collector --pdf-dir papers/ ...\n"
+            f"\n"
+            f"   The analyzer will still filter out personal documents, but a clean\n"
+            f"   source folder is faster and avoids accidental data leakage.\n"
+        )
+
+
 # ── Sub-collectors ─────────────────────────────────────────────────────────────
 
 class PDFCollector:
@@ -484,6 +531,7 @@ class UltimateCollector:
         for p in pdf_paths or []:
             path = Path(p)
             if path.is_dir():
+                _warn_if_personal_folder(path)
                 resolved_paths.extend(path.rglob("*.pdf"))
                 resolved_paths.extend(path.rglob("*.md"))
                 resolved_paths.extend(path.rglob("*.txt"))
@@ -586,6 +634,14 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", default="data/", help="Output directory")
     parser.add_argument("--min-chars", type=int, default=200)
     args = parser.parse_args()
+
+    # Auto-create --pdf-dir and --output-dir if they don't exist
+    if args.pdf_dir:
+        pdf_dir_path = Path(args.pdf_dir)
+        if not pdf_dir_path.exists():
+            pdf_dir_path.mkdir(parents=True, exist_ok=True)
+            print(f"📁 Created directory: {pdf_dir_path} (was missing)")
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     collector = UltimateCollector(
         pdf_paths=[args.pdf_dir] if args.pdf_dir else None,

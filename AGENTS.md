@@ -18,6 +18,17 @@
 │  ├─ PDF        │  ─ train/val  │  ─ poll status            │
 │  ├─ Web        │               │  ─ download results       │
 │  ├─ Drive      │  train.py      │                            │
+│  └─ GitHub     │  ─ LoRA loop  │                            │
+│                │               │                            │
+│  analyzer.py   │  eval.py  ✨  │                            │
+│                │  ─ LLM judge  │                            │
+│                │  ─ accuracy   │                            │
+│                │  ─ relevance  │                            │
+│                │  ─ complete.  │                            │
+│                │               │                            │
+│                │  code_sug. ✨ │                            │
+│                │  ─ corpus→py  │                            │
+│                │  ─ snippets   │                            │
 │  └─ GitHub     │  ─ unsloth   │  .github/workflows/        │
 │                │  ─ LoRA      │  ─ workflow_dispatch       │
 │  analyzer.py   │  ─ loop      │  ─ scheduled cron         │
@@ -138,9 +149,90 @@ python templates/program_templates.py \
 
 ---
 
-## 🚀 Phase 5 — Advanced Features (PLANNED)
+## ✅ Phase 5 — Eval + Code Suggestions (SHIPPED)
 
-### 5.1 Iterative corpus expansion
+**Goal:** Close the feedback loop with quality evaluation and translate research into actionable code.
+
+### What was built
+
+#### `autoresearch/eval.py` — LLM-as-a-Judge evaluator
+Loads `data/val.jsonl`, optionally generates model predictions, then uses a
+judge LLM to score each answer on three axes (1–5):
+- **Accuracy** — factual correctness vs reference
+- **Relevance** — how directly it answers the question
+- **Completeness** — key-point coverage
+
+Saves per-sample breakdown + summary to `results/eval_report.json`.
+Appends `judge_pass_rate` and `judge_avg_score` to the metrics row in
+`results/results.tsv`.
+
+Supports **OpenAI-compatible APIs** and **Anthropic Claude** as judge.
+Falls back to a word-overlap heuristic when no API key is set.
+
+```bash
+# Run standalone after prepare.py
+python -m autoresearch.eval \
+  --val-path data/val.jsonl \
+  --judge-model gpt-4o-mini \   # or: claude-3-5-haiku-20241022
+  --max-samples 50
+
+# Point at a trained model for end-to-end eval
+python -m autoresearch.eval \
+  --val-path data/val.jsonl \
+  --model-path models/lora_adapter \
+  --judge-model claude-3-5-haiku-20241022
+```
+
+#### `autoresearch/code_suggester.py` — Post-research code suggestions
+After research completes, reads the cleaned corpus, detects the topic
+(from `templates/program.md` or keyword analysis), and asks an LLM to
+generate **N copy-paste Python snippets** showing how to apply the
+research findings in real code.
+
+Example: corpus about Claude tool use → output includes annotated snippets
+for defining tools, handling `tool_use` response blocks, multi-step agents.
+
+Saves to `results/code_suggestions.md`.
+
+```bash
+python -m autoresearch.code_suggester \
+  --corpus data/all_docs_cleaned.txt \
+  --model claude-3-5-haiku-20241022 \
+  --n-suggestions 5
+```
+
+### Integration into `research_loop`
+
+Both modules are now called automatically from `train.py:research_loop()`:
+
+```
+Iteration N:
+  collect → prepare → train
+                          ↓
+                    eval.py (LLM judge) → eval_report.json
+                          ↓  (last iteration only)
+                    code_suggester.py  → code_suggestions.md
+                          ↓
+                    git commit results/
+```
+
+New CLI flags:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--no-eval` | — | Skip LLM judge eval |
+| `--judge-model` | `gpt-4o-mini` | Judge LLM |
+| `--eval-samples` | 50 | Max val samples to judge |
+| `--eval-threshold` | 3.0 | Pass threshold (out of 5) |
+| `--no-suggestions` | — | Skip code suggestions |
+| `--suggestion-model` | `gpt-4o-mini` | LLM for suggestions |
+| `--n-suggestions` | 5 | Number of code snippets |
+
+---
+
+## 🚀 Phase 6 — Advanced Features (PLANNED)
+
+### 6.1 Iterative corpus expansion
 On each autoresearch iteration, generate new search queries from the
 model's "knowledge gaps" and re-collect. The model's uncertainty on
 val questions drives the next collection.
@@ -155,15 +247,15 @@ for iteration in range(n):
     retrain(model, all_docs)
 ```
 
-### 5.2 Multi-model ensemble
+### 6.2 Multi-model ensemble
 Run the loop on 2–3 base models (Llama-3.2-3B, Phi-3.5-mini, Qwen2.5-3B)
 and merge adapters with `mergekit` for a stronger final model.
 
-### 5.3 Reward model scoring
+### 6.3 Reward model scoring
 Replace heuristic Q&A quality scoring with a small reward model trained
 on human preference data (RLHF-lite).
 
-### 5.4 Streaming results dashboard
+### 6.4 Streaming results dashboard
 FastAPI + SSE endpoint that streams results.tsv updates in real-time,
 displayed in a simple React dashboard.
 

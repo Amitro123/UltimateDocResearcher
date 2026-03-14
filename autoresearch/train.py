@@ -286,6 +286,20 @@ def research_loop(
     config: Optional[TrainConfig] = None,
     collect_fn=None,
     prepare_fn=None,
+    # Eval settings
+    run_llm_eval: bool = True,
+    judge_model: str = "gpt-4o-mini",
+    eval_max_samples: int = 50,
+    eval_pass_threshold: float = 3.0,
+    # Code suggestion settings
+    run_code_suggestions: bool = True,
+    suggestion_model: str = "gpt-4o-mini",
+    corpus_path: str = "data/all_docs_cleaned.txt",
+    n_code_suggestions: int = 5,
+    # Memory settings
+    run_id: Optional[int] = None,
+    similarity_threshold: float = 0.8,
+    skip_if_similar: bool = False,
 ):
     """
     Full autoresearch loop:
@@ -293,10 +307,58 @@ def research_loop(
         1. Collect (or re-collect with expanded queries)
         2. Prepare (generate Q&A)
         3. Train (LoRA fine-tune)
-        4. Evaluate → append to results.tsv
-        5. Commit results to git
+        4. LLM-as-Judge eval → results/eval_report.json
+        5. Code suggestions → results/code_suggestions.md
+        6. Commit results to git
+
+    Args:
+        run_llm_eval:        enable LLM-as-Judge evaluation after each iteration
+        judge_model:         LLM to use as judge (gpt-4o-mini, claude-3-5-haiku-20241022, …)
+        eval_max_samples:    cap on val samples to judge per iteration
+        eval_pass_threshold: minimum overall score to "pass" a sample (1–5)
+        run_code_suggestions: generate code suggestions after the LAST iteration
+        suggestion_model:    LLM for code suggestion generation
+        corpus_path:         path to cleaned corpus used for suggestions
+        n_code_suggestions:  number of code snippets to generate
+        run_id:              existing RunMemory id (passed from dashboard); creates one if None
+        similarity_threshold: threshold for similar-topic check (0–1)
+        skip_if_similar:     if True and a similar run exists, return early with its results
     """
     cfg = config or TrainConfig(topic=topic)
+
+    # ── Memory: check for similar past runs ───────────────────────────────
+    _mem = None
+    try:
+        from memory.memory import RunMemory
+        _mem = RunMemory()
+
+        similar = _mem.find_similar(topic, threshold=similarity_threshold)
+        if similar and skip_if_similar:
+            best = similar[0]
+            print(
+                f"\n[memory] Similar run found: '{best['topic']}' "
+                f"(similarity={best['similarity']:.0%}, score={best.get('avg_score') or '?'})\n"
+                f"[memory] Skipping research — use --no-skip-similar to force a new run."
+            )
+            return
+
+        if similar:
+            print(
+                f"\n[memory] ℹ️  Similar past run: '{similar[0]['topic']}' "
+                f"(similarity={similar[0]['similarity']:.0%}). "
+                f"Starting new run anyway (use --skip-if-similar to reuse)."
+            )
+
+        # Register or reuse a run_id in the DB
+        if run_id is None:
+            run_id = _mem.start_run(topic, judge_model=judge_model)
+            print(f"[memory] Run #{run_id} started → dashboard/runs.db")
+
+    except Exception as exc:
+        print(f"[memory] Memory system unavailable: {exc}", file=sys.stderr)
+        _mem = None
+
+    all_metrics: list[dict] = []
 
     for i in range(n_iterations):
         print(f"\n{'='*60}")
@@ -316,10 +378,89 @@ def research_loop(
         # 3. Train
         metrics = train(cfg)
 
-        # 4. Optionally commit results
+        # 4. LLM-as-Judge eval
+        if run_llm_eval:
+            try:
+                from autoresearch.eval import run_eval
+                eval_report = run_eval(
+                    val_path=cfg.val_path,
+                    model_path=cfg.output_dir if Path(cfg.output_dir).exists() else None,
+                    judge_model=judge_model,
+                    max_samples=eval_max_samples,
+                    pass_threshold=eval_pass_threshold,
+                    output_dir=Path(cfg.results_tsv).parent,
+                    iteration=cfg.iteration,
+                    topic=topic,
+                )
+                if eval_report and "summary" in eval_report:
+                    metrics["judge_pass_rate"] = eval_report["summary"]["pass_rate"]
+                    metrics["judge_avg_score"] = eval_report["summary"]["avg_overall"]
+            except Exception as exc:
+                print(f"[train] LLM eval skipped: {exc}", file=sys.stderr)
+
+        all_metrics.append(metrics)
+
+        # Log iteration to memory DB
+        if _mem and run_id:
+            try:
+                _mem.log_iteration(
+                    run_id, i + 1,
+                    train_loss=metrics.get("train_loss"),
+                    val_loss=metrics.get("val_loss"),
+                    val_score=metrics.get("val_score"),
+                    judge_pass_rate=metrics.get("judge_pass_rate"),
+                    judge_avg_score=metrics.get("judge_avg_score"),
+                )
+            except Exception as exc:
+                print(f"[memory] log_iteration failed: {exc}", file=sys.stderr)
+
+        # 5. Code suggestions — run on the LAST iteration only
+        is_last = (i + 1 == n_iterations)
+        if run_code_suggestions and is_last:
+            try:
+                from autoresearch.code_suggester import generate_suggestions
+                suggestions_path = Path(cfg.results_tsv).parent / "code_suggestions.md"
+                generate_suggestions(
+                    corpus_path=corpus_path,
+                    topic=topic,
+                    model=suggestion_model,
+                    output_path=suggestions_path,
+                    n_suggestions=n_code_suggestions,
+                )
+            except Exception as exc:
+                print(f"[train] Code suggestions skipped: {exc}", file=sys.stderr)
+
+        # 6. Optionally commit results
         _git_commit_results(i + 1, metrics)
 
         print(f"  val_score = {metrics.get('val_score', 'N/A')}")
+        if "judge_avg_score" in metrics:
+            print(f"  judge_avg_score = {metrics['judge_avg_score']} "
+                  f"(pass_rate={metrics.get('judge_pass_rate', '?')})")
+
+    # ── Memory: mark run complete ─────────────────────────────────────────
+    if _mem and run_id and all_metrics:
+        try:
+            scores = [m["val_score"] for m in all_metrics if m.get("val_score") is not None]
+            pass_rates = [m["judge_pass_rate"] for m in all_metrics if m.get("judge_pass_rate") is not None]
+            suggestions_path = str(Path(cfg.results_tsv).parent / "code_suggestions.md")
+            _mem.finish_run(
+                run_id,
+                status="completed",
+                iterations=n_iterations,
+                avg_score=round(sum(scores) / len(scores), 4) if scores else None,
+                pass_rate=round(sum(pass_rates) / len(pass_rates), 4) if pass_rates else None,
+                corpus_chars=Path(corpus_path).stat().st_size if Path(corpus_path).exists() else None,
+                n_suggestions=n_code_suggestions,
+                results_path=cfg.results_tsv,
+                eval_path=str(Path(cfg.results_tsv).parent / "eval_report.json"),
+                suggestions_path=suggestions_path,
+            )
+            print(f"\n[memory] Run #{run_id} completed → dashboard/runs.db")
+        except Exception as exc:
+            print(f"[memory] finish_run failed: {exc}", file=sys.stderr)
+        finally:
+            _mem.close()
 
 
 def _git_commit_results(iteration: int, metrics: dict) -> None:
@@ -356,6 +497,24 @@ if __name__ == "__main__":
     parser.add_argument("--topic", default="")
     parser.add_argument("--output-dir", default="models/lora_adapter")
     parser.add_argument("--results-tsv", default="results/results.tsv")
+    # Eval flags
+    parser.add_argument("--no-eval", action="store_true", help="Skip LLM-as-Judge eval")
+    parser.add_argument("--judge-model", default="gpt-4o-mini",
+                        help="Judge LLM (gpt-4o-mini, claude-3-5-haiku-20241022, …)")
+    parser.add_argument("--eval-samples", type=int, default=50)
+    parser.add_argument("--eval-threshold", type=float, default=3.0)
+    # Code suggestion flags
+    parser.add_argument("--no-suggestions", action="store_true", help="Skip code suggestions")
+    parser.add_argument("--suggestion-model", default="gpt-4o-mini")
+    parser.add_argument("--corpus", default="data/all_docs_cleaned.txt")
+    parser.add_argument("--n-suggestions", type=int, default=5)
+    # Memory flags
+    parser.add_argument("--run-id", type=int, default=None,
+                        help="Existing RunMemory run id (set by dashboard)")
+    parser.add_argument("--similarity-threshold", type=float, default=0.8,
+                        help="Topic similarity threshold for 'already researched' check")
+    parser.add_argument("--skip-if-similar", action="store_true",
+                        help="Exit early if a similar past run is found")
     args = parser.parse_args()
 
     cfg = TrainConfig(
@@ -365,4 +524,23 @@ if __name__ == "__main__":
         results_tsv=args.results_tsv,
         topic=args.topic,
     )
-    train(cfg)
+
+    if args.iterations > 1:
+        research_loop(
+            topic=args.topic,
+            n_iterations=args.iterations,
+            config=cfg,
+            run_llm_eval=not args.no_eval,
+            judge_model=args.judge_model,
+            eval_max_samples=args.eval_samples,
+            eval_pass_threshold=args.eval_threshold,
+            run_code_suggestions=not args.no_suggestions,
+            suggestion_model=args.suggestion_model,
+            corpus_path=args.corpus,
+            n_code_suggestions=args.n_suggestions,
+            run_id=args.run_id,
+            similarity_threshold=args.similarity_threshold,
+            skip_if_similar=args.skip_if_similar,
+        )
+    else:
+        train(cfg)

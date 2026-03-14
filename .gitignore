@@ -155,7 +155,14 @@ cython_debug/
 # Project specific
 data/
 results/
+dashboard/cache/
+dashboard/*.db*
+papers/
+*.pdf
+**/*.ipynb
+!demo/*.ipynb
 **/__pycache__
 .DS_Store
 pytest_log.txt
 test_output.txt
+test_results.txt

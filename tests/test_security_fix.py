@@ -50,8 +50,11 @@ class TestSecurityFix(unittest.TestCase):
             self.assertIn('N_ITERATIONS = 10', topic_cell)
 
         finally:
-            if os.path.exists(output_path):
-                os.remove(output_path)
+            try:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+            except OSError:
+                pass  # cleanup failure is non-fatal in test env
 
 if __name__ == '__main__':
     unittest.main()

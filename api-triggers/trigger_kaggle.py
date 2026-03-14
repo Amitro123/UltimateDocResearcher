@@ -147,7 +147,7 @@ def generate_kernel_notebook(
       3. Runs the full collect → prepare → train loop
     """
     cells = [
-        _code_cell(f'# UltimateDocResearcher — {topic.replace("\n", " ")}'),
+        _code_cell(f'# UltimateDocResearcher — {topic.replace(chr(10), " ")}'),
         _code_cell(f"""\
 import subprocess, os, sys
 print("🚀 Starting UltimateDocResearcher research loop...")

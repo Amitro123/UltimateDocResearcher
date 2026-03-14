@@ -1,0 +1,95 @@
+# eval/eval_spec.yaml
+# ---------------------
+# Standardized 5-criteria evaluation framework for UltimateDocResearcher outputs.
+#
+# Used by eval/run_eval.py to score any research output (code_suggestions.md,
+# rules files, skill descriptions, etc.) using an LLM as judge.
+#
+# Weights determine how much each criterion contributes to the final score.
+# Final score = sum(criterion_score * weight) / sum(weights)
+#
+# Pass/fail threshold is set at runtime via --threshold (default: 3.5).
+
+version: "1.0"
+
+criteria:
+  - name: clarity
+    question: >
+      Score 1-5: Are the rules, patterns, or code examples crystal clear
+      with no ambiguity? Would a developer unfamiliar with the codebase
+      understand exactly what to do without asking follow-up questions?
+    weight: 2.0
+    description: >
+      Highest-weight criterion. Unclear instructions cause misuse.
+      Look for: vague verbs, missing context, unexplained acronyms,
+      contradictory guidance.
+
+  - name: completeness
+    question: >
+      Score 1-5: Does the output cover 90%+ of the documented patterns
+      from the corpus with no significant gaps? Are edge cases addressed?
+    weight: 1.5
+    description: >
+      A comprehensive output leaves no major pattern undocumented.
+      Look for: missing file types, unaddressed error paths, gaps
+      in coverage compared to the source corpus.
+
+  - name: actionability
+    question: >
+      Score 1-5: Is the output immediately copy-paste usable with no
+      additional boilerplate or setup required? Can a developer apply
+      these patterns right now without extra research?
+    weight: 1.5
+    description: >
+      Actionable output has concrete examples, real function names,
+      and working imports — not pseudocode or placeholders.
+      Look for: TODO comments, missing imports, pseudo-function calls.
+
+  - name: freshness
+    question: >
+      Score 1-5: Does the output use the latest patterns and practices
+      (2026 standards)? Are deprecated APIs, old idioms, or outdated
+      patterns avoided?
+    weight: 1.0
+    description: >
+      Research outputs should reflect current best practices.
+      Look for: deprecated library versions, old-style patterns
+      superseded by newer APIs, missing recent features.
+
+  - name: anti_patterns
+    question: >
+      Score 1-5: Does the output explicitly identify and warn against
+      common mistakes? Are anti-patterns called out with concrete
+      examples of what NOT to do?
+    weight: 1.0
+    description: >
+      The best outputs prevent misuse, not just enable correct use.
+      Look for: "gotcha" sections, explicit DON'T examples,
+      failure modes described alongside success patterns.
+
+# Scoring interpretation
+scoring:
+  scale:
+    1: "Very poor — major issues, unusable in practice"
+    2: "Poor — significant gaps or problems"
+    3: "Acceptable — meets minimum bar but needs work"
+    4: "Good — solid output with minor gaps"
+    5: "Excellent — production-ready, comprehensive"
+
+  pass_threshold_default: 3.5   # weighted average; overridable via --threshold
+  max_possible_score: 5.0
+
+# Output format for results/eval-report.json
+output_schema:
+  per_criterion:
+    - score          # int 1-5
+    - reasoning      # judge's explanation (max 500 chars)
+    - weighted_score # score * weight
+  summary:
+    - weighted_avg   # final score
+    - passed         # bool: weighted_avg >= threshold
+    - criterion_scores  # dict of name → score
+    - timestamp
+    - judge_model
+    - input_file
+    - threshold_used

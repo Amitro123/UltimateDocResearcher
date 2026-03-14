@@ -3,9 +3,11 @@ analyzer.py — Text analysis and quality filtering for collected documents.
 
 Runs after UltimateCollector to:
   1. Score document quality (length, language, information density)
-  2. Chunk long docs into training-sized windows
-  3. Generate a summary report
-  4. Write the final all_docs.txt ready for autoresearch/prepare.py
+  2. Filter personal documents (invoices, receipts, contracts, CVs)
+  3. Filter non-research languages (Hebrew, Arabic, etc.) unless topic-relevant
+  4. Chunk long docs into training-sized windows
+  5. Generate a summary report
+  6. Write the final all_docs.txt ready for autoresearch/prepare.py
 """
 
 from __future__ import annotations
@@ -13,9 +15,9 @@ from __future__ import annotations
 import json
 import re
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 @dataclass
@@ -25,25 +27,157 @@ class DocStats:
     chars: int
     words: int
     sentences: int
-    quality_score: float  # 0.0 – 1.0
+    quality_score: float        # 0.0 – 1.0
+    filter_reason: str = ""     # non-empty when rejected; explains why
 
 
-def score_document(text: str) -> float:
+# ── Personal document detection ───────────────────────────────────────────────
+
+# Patterns that strongly indicate personal/financial documents
+_PERSONAL_DOC_PATTERNS = [
+    # Invoices & receipts
+    r"\binvoice\s*(number|no\.?|#)?\s*[\d\-]+",
+    r"\border\s*(number|no\.?|#)\s*[\d\-]+",
+    r"\breceipt\s*(number|no\.?|#)?",
+    r"\bcheckout\s*order",
+    r"\btotal\s+(to\s+pay|amount|due)\b",
+    r"\bsubtotal\b.{0,40}\$",
+    r"\bpayment\s+(received|due|overdue)\b",  # "payment method" alone is too broad (hits API/tech docs)
+    r"\bpayment\s+method\s*:\s*(credit|debit|visa|mastercard|paypal|bank)",  # specific checkout context only
+    r"\bship(ping|ped)\s+to\b",
+    r"\bvat\s+number\b",
+    # Bank / financial statements
+    r"\baccount\s+(number|balance|statement)\b",
+    r"\btransaction\s+(id|history|date)\b",
+    r"\bbank\s+(transfer|statement|account)\b",
+    r"\biban\b",
+    # Contracts / legal
+    r"\bhereby\s+(agree|confirm|acknowledge)\b",
+    r"\bterms?\s+and\s+conditions?\b.{0,60}\bsigned?\b",
+    r"\bsignature\s+of\s+(employee|employer|party)\b",
+    r"\beffective\s+date\s*:\s*\d",
+    # CVs / resumes
+    r"\b(curriculum\s+vitae|résumé|resume)\b",
+    r"\bwork\s+experience\b.{0,200}\beducation\b",
+    r"\bskills?\s*:\s*\n.{0,50}\bexperience\b",
+    # Medical records
+    r"\bpatient\s+(name|id|dob)\b",
+    r"\bdiagnosis\b.{0,200}\bprescription\b",
+    r"\bhospital\s+(number|admission|discharge)\b",
+]
+
+_PERSONAL_DOC_REGEX = re.compile(
+    "|".join(_PERSONAL_DOC_PATTERNS), re.I | re.DOTALL
+)
+
+# Title-level signals that flag a doc as personal before reading the body
+_PERSONAL_TITLE_PATTERNS = re.compile(
+    # Underscores and hyphens are common filename separators, so don't use \b
+    # after "invoice" etc. — match as long as the keyword appears in the title.
+    r"(invoice|receipt|order[\s_\-]\d|\bstatement\b|\bcontract\b|"
+    r"offer[\s_\-]letter|curriculum[\s_\-]vitae|cv[\s_\-]\d|\bresume\b|"
+    r"\bsalary\b|\bpayslip\b|tax[\s_\-]return|bank[\s_\-]statement|"
+    r"medical[\s_\-]record)",
+    re.I,
+)
+
+
+def is_personal_document(text: str, title: str = "") -> tuple[bool, str]:
     """
-    Heuristic quality score (0-1):
-      • Penalise very short texts
-      • Reward higher type-token ratio (vocabulary diversity)
-      • Penalise boilerplate patterns (cookie notices, nav bars, etc.)
+    Return (True, reason) if the document looks like a personal/financial file.
+    Checks title first (fast), then body patterns.
+    """
+    if _PERSONAL_TITLE_PATTERNS.search(title):
+        return True, f"personal document title: '{title}'"
+
+    m = _PERSONAL_DOC_REGEX.search(text)
+    if m:
+        snippet = m.group(0)[:60].replace("\n", " ")
+        return True, f"personal document pattern: '{snippet}'"
+
+    return False, ""
+
+
+# ── Language / script detection ───────────────────────────────────────────────
+
+# Unicode ranges for non-Latin scripts
+_SCRIPT_RANGES = {
+    "hebrew":   ("\u05d0", "\u05ea"),
+    "arabic":   ("\u0600", "\u06ff"),
+    "chinese":  ("\u4e00", "\u9fff"),
+    "japanese": ("\u3040", "\u30ff"),
+    "korean":   ("\uac00", "\ud7af"),
+    "cyrillic": ("\u0400", "\u04ff"),
+}
+
+
+def dominant_script(text: str) -> tuple[str, float]:
+    """
+    Return (script_name, fraction) for the most common non-ASCII script.
+    Returns ("latin", 0.0) when the text is predominantly Latin.
+    """
+    total = max(len(text), 1)
+    latin = sum(1 for c in text if "a" <= c.lower() <= "z")
+    latin_frac = latin / total
+
+    best_name, best_frac = "latin", 0.0
+    for name, (lo, hi) in _SCRIPT_RANGES.items():
+        count = sum(1 for c in text if lo <= c <= hi)
+        frac = count / total
+        if frac > best_frac:
+            best_name, best_frac = name, frac
+
+    # If non-Latin script is more than 20% of the text, it dominates
+    if best_frac > 0.20 and best_frac > latin_frac * 0.5:
+        return best_name, best_frac
+
+    return "latin", latin_frac
+
+
+def is_non_research_language(text: str, title: str = "") -> tuple[bool, str]:
+    """
+    Return (True, reason) if the document is predominantly in a non-Latin
+    script unlikely to be AI/tech research content.
+    """
+    script, frac = dominant_script(text)
+    if script != "latin" and frac > 0.20:
+        pct = int(frac * 100)
+        return True, f"{pct}% {script} script — likely not research content"
+    return False, ""
+
+
+# ── Quality scoring ───────────────────────────────────────────────────────────
+
+def score_document(text: str, title: str = "") -> tuple[float, str]:
+    """
+    Heuristic quality score (0–1) plus a rejection reason string.
+
+    Returns (score, reason) where reason is non-empty when the document
+    should be filtered out regardless of the numeric score:
+      • Personal/financial documents  → score 0.0
+      • Non-research language         → score 0.0
+      • Web boilerplate               → penalised
+      • Short texts                   → low score
+      • Good vocabulary diversity     → high score
     """
     if not text.strip():
-        return 0.0
+        return 0.0, "empty document"
+
+    # Hard filters — run before any scoring
+    personal, reason = is_personal_document(text, title)
+    if personal:
+        return 0.0, reason
+
+    non_latin, reason = is_non_research_language(text, title)
+    if non_latin:
+        return 0.0, reason
 
     words = text.split()
     n_words = len(words)
     if n_words < 50:
-        return 0.1
+        return 0.1, "too short"
 
-    # Type-token ratio (capped at 0.5 → 1.0 range)
+    # Type-token ratio (vocabulary diversity)
     vocab = len(set(w.lower() for w in words))
     ttr = min(vocab / n_words, 1.0)
 
@@ -60,7 +194,7 @@ def score_document(text: str) -> float:
     length_bonus = min(n_words / 2000, 1.0) * 0.2
 
     score = ttr * 0.6 + length_bonus - bp_penalty
-    return max(0.0, min(1.0, score))
+    return max(0.0, min(1.0, score)), ""
 
 
 def chunk_text(
@@ -87,20 +221,31 @@ def chunk_text(
     return chunks
 
 
-def analyze_corpus(all_docs_path: str | Path, output_dir: str | Path = "data/") -> dict:
+def analyze_corpus(
+    all_docs_path: str | Path,
+    output_dir: str | Path = "data/",
+    quality_threshold: float = 0.25,
+    verbose: bool = True,
+) -> dict:
     """
-    Read all_docs.txt, compute stats, filter low-quality docs, re-chunk,
-    and write cleaned all_docs.txt + report.json.
+    Read all_docs.txt, compute stats, filter low-quality / personal / non-research
+    docs, re-chunk, and write cleaned corpus + corpus_report.json.
+
+    Filters applied (in order):
+      1. Personal/financial documents  (invoices, receipts, contracts, CVs)
+      2. Non-research language         (Hebrew, Arabic, etc. > 20% of text)
+      3. Quality threshold             (type-token ratio, length, boilerplate)
     """
     path = Path(all_docs_path)
     output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     raw_text = path.read_text(encoding="utf-8")
 
-    # Split by doc separator
     raw_docs = raw_text.split("<DOC_SEP>")
 
     stats_list: List[DocStats] = []
     good_chunks: List[str] = []
+    filtered_docs: List[dict] = []       # for the report
 
     for raw_doc in raw_docs:
         raw_doc = raw_doc.strip()
@@ -115,47 +260,92 @@ def analyze_corpus(all_docs_path: str | Path, output_dir: str | Path = "data/") 
 
         words = body.split()
         sentences = len(re.findall(r"[.!?]+", body))
-        score = score_document(body)
+        score, reason = score_document(body, title)
 
-        stats_list.append(DocStats(
+        ds = DocStats(
             title=title,
             source=source,
             chars=len(body),
             words=len(words),
             sentences=sentences,
             quality_score=round(score, 3),
-        ))
+            filter_reason=reason,
+        )
+        stats_list.append(ds)
 
-        if score >= 0.25:
+        if score >= quality_threshold and not reason:
             chunks = chunk_text(body)
             good_chunks.extend(chunks)
+        else:
+            # Reason is set for hard-filtered docs; threshold failure has no reason
+            effective_reason = reason or f"quality score {score:.2f} < {quality_threshold}"
+            filtered_docs.append({"title": title, "reason": effective_reason})
+            if verbose:
+                print(f"  [filtered] {title[:60]} — {effective_reason}")
+
+    # Warn if nothing survived
+    if not good_chunks:
+        print(
+            "\n⚠️  WARNING: 0 documents survived filtering.\n"
+            "   Check that --pdf-dir points at a research-specific folder,\n"
+            "   not a general Downloads or Documents directory.\n"
+            "   All personal/non-research documents were removed.\n"
+        )
 
     # Write cleaned corpus
     cleaned_path = output_dir / "all_docs_cleaned.txt"
     with cleaned_path.open("w", encoding="utf-8") as f:
         f.write("\n\n".join(good_chunks))
 
-    # Write report
+    passing = [s for s in stats_list if s.quality_score >= quality_threshold and not s.filter_reason]
+
     report = {
         "total_docs": len(stats_list),
-        "docs_passing_filter": sum(1 for s in stats_list if s.quality_score >= 0.25),
+        "docs_passing_filter": len(passing),
+        "docs_filtered_personal": sum(
+            1 for s in stats_list
+            if "personal document" in s.filter_reason or "script" in s.filter_reason
+        ),
+        "docs_filtered_quality": sum(
+            1 for s in stats_list
+            if s.filter_reason == "" and s.quality_score < quality_threshold
+        ),
         "total_chars_raw": sum(s.chars for s in stats_list),
         "total_chars_cleaned": cleaned_path.stat().st_size,
         "total_chunks": len(good_chunks),
-        "avg_quality_score": round(statistics.mean(s.quality_score for s in stats_list), 3) if stats_list else 0,
+        "avg_quality_score": round(
+            statistics.mean(s.quality_score for s in stats_list), 3
+        ) if stats_list else 0,
         "source_breakdown": _source_breakdown(stats_list),
         "doc_stats": [
-            {"title": s.title, "source": s.source, "words": s.words, "quality": s.quality_score}
+            {
+                "title": s.title,
+                "source": s.source,
+                "words": s.words,
+                "quality": s.quality_score,
+                **({"filtered_reason": s.filter_reason} if s.filter_reason else {}),
+            }
             for s in sorted(stats_list, key=lambda x: x.quality_score, reverse=True)[:20]
         ],
+        "filtered_docs": filtered_docs,
     }
     report_path = output_dir / "corpus_report.json"
-    report_path.write_text(json.dumps(report, indent=2))
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
 
-    print(f"✅ Analyzer complete:")
-    print(f"   {report['total_docs']} docs → {report['docs_passing_filter']} pass quality filter")
-    print(f"   {report['total_chunks']} chunks → {cleaned_path}")
-    print(f"   Avg quality score: {report['avg_quality_score']}")
+    if verbose:
+        personal_n = report["docs_filtered_personal"]
+        quality_n = report["docs_filtered_quality"]
+        print(f"\n✅ Analyzer complete:")
+        print(f"   {report['total_docs']} docs scanned")
+        print(f"   {report['docs_passing_filter']} passed  |  "
+              f"{personal_n} personal/language filtered  |  "
+              f"{quality_n} low-quality filtered")
+        print(f"   {report['total_chunks']} chunks → {cleaned_path}")
+        print(f"   Avg quality score: {report['avg_quality_score']}")
+        if personal_n:
+            print(f"\n   ℹ️  {personal_n} personal documents were removed (invoices, contracts, CVs, etc.).")
+            print(f"      Use a dedicated papers/ folder instead of Downloads to avoid this.")
+
     return report
 
 
@@ -169,8 +359,11 @@ def _source_breakdown(stats: List[DocStats]) -> dict:
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Analyze and filter research corpus")
     parser.add_argument("--input", default="data/all_docs.txt")
     parser.add_argument("--output-dir", default="data/")
+    parser.add_argument("--threshold", type=float, default=0.25,
+                        help="Minimum quality score to keep a document (default: 0.25)")
+    parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
-    analyze_corpus(args.input, args.output_dir)
+    analyze_corpus(args.input, args.output_dir, args.threshold, verbose=not args.quiet)
