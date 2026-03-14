@@ -1,0 +1,13 @@
+{
+  "id": "amitrosen1/ultimatedocresearcher-test-run-success",
+  "title": "UltimateDocResearcher \u2014 test run success",
+  "code_file": "notebook.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [],
+  "competition_sources": [],
+  "kernel_sources": []
+}

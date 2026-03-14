@@ -157,3 +157,5 @@ data/
 results/
 **/__pycache__
 .DS_Store
+pytest_log.txt
+test_output.txt
