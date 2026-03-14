@@ -1,47 +1,37 @@
-# UltimateDocResearcher 🔬
-
-> Autonomous research agent: collect PDFs/web/Drive/GitHub → self-improving LLM fine-tuning loop on Kaggle GPU — no local GPU required.
-
-Built on top of [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
-
----
-
 ## Architecture
 
-```
-PDF / Markdown / Text ─┐
-Web (Google CSE)        ├──▶ UltimateCollector ──▶ data/all_docs.txt
-Reddit / GitHub        ─┤         │
-Google Drive           ─┘    analyzer.py
-                              (quality filter + chunking)
-                                    │
-                              data/all_docs_cleaned.txt
-                                    │
-                              autoresearch/prepare.py
-                              (Q&A generation)
-                                    │
-                         data/train.jsonl  data/val.jsonl
-                                    │
-                         ┌──────────┴────────────┐
-                         │  autoresearch/train.py │
-                         │  (unsloth LoRA, T4 GPU)│
-                         └──────────┬────────────┘
-                                    │
-                              results/results.tsv
-                              (val_score improves
-                               over 20+ iterations)
-                                    │
-                              git commit + push ──▶ GitHub
+```mermaid
+graph TD
+    subgraph Collector
+        C[UltimateCollector] --> P[PDF/Local]
+        C --> W[Web Scraper]
+        C --> D[Google Drive]
+        C --> G[GitHub Repos]
+    end
+
+    C --> |data/all_docs.txt| A[Autoresearch Loop]
+    
+    subgraph Research
+        A --> T[Train / LoRA]
+        A --> E[Evaluate]
+        A --> Q[Query Generation]
+    end
+    
+    Q --> |knowledge gaps| C
+    T --> |Results| R[results/metrics.tsv]
 ```
 
-## Quick Start
+## 🚀 Quick Start
 
-### 1. Clone & install
-
+### 1. Local Setup
 ```bash
-git clone https://github.com/yourusername/ultimate-doc-researcher
+# Clone & install
+git clone https://github.com/Amitro123/UltimateDocResearcher
 cd ultimate-doc-researcher
 pip install -r requirements.txt
+
+# Run a mock research cycle
+python collector/run_mock.py --topic "AI engineering"
 ```
 
 ### 2. Collect documents
