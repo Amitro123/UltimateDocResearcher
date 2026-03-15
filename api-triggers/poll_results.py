@@ -69,6 +69,11 @@ if __name__ == "__main__":
     parser.add_argument("--git-sync", action="store_true")
     args = parser.parse_args()
 
+    # Support running from project root (`python api-triggers/poll_results.py`)
+    # as well as from inside the api-triggers/ directory.
+    _dir = Path(__file__).resolve().parent
+    if str(_dir) not in sys.path:
+        sys.path.insert(0, str(_dir))
     from trigger_kaggle import KaggleRunner
     runner = KaggleRunner()
 

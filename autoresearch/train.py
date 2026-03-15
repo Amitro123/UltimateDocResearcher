@@ -22,7 +22,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -82,7 +82,7 @@ def train(config: TrainConfig) -> dict:
     metrics["elapsed_seconds"] = round(elapsed, 1)
     metrics["iteration"] = config.iteration
     metrics["topic"] = config.topic
-    metrics["timestamp"] = datetime.utcnow().isoformat()
+    metrics["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     _append_results(metrics, config.results_tsv)
     print(f"\n✅ Training complete in {elapsed/60:.1f}min  val_loss={metrics.get('val_loss', 'N/A')}")
@@ -266,10 +266,16 @@ def _loss_to_score(loss: float) -> float:
 
 
 def _append_results(metrics: dict, tsv_path: str) -> None:
-    """Append metrics row to results.tsv, creating headers if needed."""
+    """Append metrics row to results.tsv, creating headers if needed.
+
+    A header is written on the first row even if the file already exists but is
+    empty (e.g. a stale results.tsv from a previous run that was truncated).
+    This prevents pandas.read_csv() failures when the TSV has data rows but no
+    column names.
+    """
     path = Path(tsv_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not path.exists()
+    write_header = not path.exists() or path.stat().st_size == 0
     with path.open("a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(metrics.keys()), delimiter="\t")
         if write_header:

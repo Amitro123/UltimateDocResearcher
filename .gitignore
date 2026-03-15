@@ -155,6 +155,7 @@ cython_debug/
 # Project specific
 data/
 results/
+models/
 dashboard/cache/
 dashboard/*.db*
 papers/
@@ -166,3 +167,7 @@ papers/
 pytest_log.txt
 test_output.txt
 test_results.txt
+.env.example
+.claude/settings.local.json
+.claude/settings.local.json
+.claude/settings.local.json

@@ -5,6 +5,7 @@ Unit tests for collector/scraper.py.
 
 Tests cover:
   - _html_to_text() with and without BeautifulSoup
+  - reddit_top_posts() graceful empty-list return on 403 / non-JSON response
   - scrape_topic() safe to call from a synchronous context (no RuntimeError)
   - scrape_topic() dispatches to a thread pool when an event loop is already running
   - scrape_topic() returns a string (may be empty if no APIs configured)
@@ -17,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from collector.scraper import _html_to_text, scrape_topic
+from collector.scraper import _html_to_text, scrape_topic, reddit_top_posts
 
 
 # ── _html_to_text ─────────────────────────────────────────────────────────────
@@ -122,6 +123,74 @@ class TestScrapeTopicSync(unittest.TestCase):
 
         mock_run.assert_called_once()
         self.assertEqual(result, "direct result")
+
+
+# ── reddit_top_posts() 403 / non-JSON graceful handling ───────────────────────
+
+class TestRedditTopPosts(unittest.IsolatedAsyncioTestCase):
+    """
+    reddit_top_posts() must return [] instead of crashing on:
+      - HTTP 403 (Cloudflare challenge)
+      - Non-JSON content-type (HTML error page)
+    """
+
+    def _make_resp(self, status: int, content_type: str, body: bytes = b"{}"):
+        resp = MagicMock()
+        resp.status = status
+        resp.content_type = content_type
+        resp.json = AsyncMock(return_value={})
+        # context manager protocol
+        resp.__aenter__ = AsyncMock(return_value=resp)
+        resp.__aexit__ = AsyncMock(return_value=False)
+        return resp
+
+    def _make_session(self, resp):
+        session = MagicMock()
+        session.get = MagicMock(return_value=resp)
+        return session
+
+    async def test_returns_empty_on_403(self):
+        """403 response → returns [] instead of crashing."""
+        resp = self._make_resp(403, "text/html")
+        session = self._make_session(resp)
+        posts = await reddit_top_posts("MachineLearning", session=session)
+        self.assertEqual(posts, [])
+
+    async def test_returns_empty_on_html_content_type(self):
+        """200 with text/html (Cloudflare challenge page) → returns []."""
+        resp = self._make_resp(200, "text/html; charset=utf-8")
+        session = self._make_session(resp)
+        posts = await reddit_top_posts("LocalLLaMA", session=session)
+        self.assertEqual(posts, [])
+
+    async def test_returns_posts_on_valid_json(self):
+        """200 with application/json and valid payload → returns parsed posts."""
+        payload = {
+            "data": {
+                "children": [
+                    {"data": {
+                        "title": "Test post",
+                        "selftext": "Some body text",
+                        "permalink": "/r/ML/comments/abc/test",
+                        "score": 42,
+                    }}
+                ]
+            }
+        }
+        resp = self._make_resp(200, "application/json")
+        resp.json = AsyncMock(return_value=payload)
+        session = self._make_session(resp)
+        posts = await reddit_top_posts("MachineLearning", session=session)
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0]["title"], "Test post")
+        self.assertEqual(posts[0]["score"], 42)
+
+    async def test_returns_empty_on_rate_limit_429(self):
+        """429 response (rate limit) → returns [] without crashing."""
+        resp = self._make_resp(429, "text/html")
+        session = self._make_session(resp)
+        posts = await reddit_top_posts("artificial", session=session)
+        self.assertEqual(posts, [])
 
 
 if __name__ == "__main__":

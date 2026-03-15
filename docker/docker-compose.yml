@@ -1,0 +1,156 @@
+version: "3.9"
+
+# UltimateDocResearcher — full stack
+#
+# Services:
+#   ollama     — local LLM backend (llama3.2, free, no API key needed)
+#   app        — research pipeline (collector, analyzer, code_suggester, etc.)
+#   dashboard  — Streamlit UI  →  http://localhost:8501
+#   chat       — Streamlit chat interface  →  http://localhost:8503
+#
+# Quick start:
+#   docker compose up
+#   open http://localhost:8501
+#
+# First time (pull the LLM model — ~2 GB, one-time):
+#   docker compose run --rm ollama ollama pull llama3.2
+#
+# Environment variables:
+#   Copy .env.example → .env and fill in any API keys you want to use.
+#   Ollama works without any keys. Keys are never required.
+
+services:
+
+  # ── Ollama — local LLM ─────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: udr-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama          # persist downloaded models
+    environment:
+      - OLLAMA_KEEP_ALIVE=5m
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:11434/api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Model pull (runs once, then exits) ────────────────────────────────────
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: udr-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["ollama", "pull", "llama3.2"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    restart: "no"
+
+  # ── App — research pipeline ────────────────────────────────────────────────
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: udr-app
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ../data:/app/data                    # corpus files
+      - ../results:/app/results              # deliverables
+      - ../papers:/app/papers                # input PDFs
+      - ../memory:/app/memory                # SQLite cache + runs DB
+    environment:
+      - PYTHONPATH=/app
+      - OLLAMA_HOST=http://ollama:11434
+      - DATA_DIR=/app/data
+      # Optional API keys — override in .env
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    env_file:
+      - ../.env
+    command: ["python", "-m", "autoresearch.llm_client", "check"]
+
+  # ── Dashboard — Streamlit UI ───────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: udr-dashboard
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../data:/app/data
+      - ../results:/app/results
+      - ../papers:/app/papers
+      - ../memory:/app/memory
+      - ../dashboard:/app/dashboard
+    environment:
+      - PYTHONPATH=/app
+      - OLLAMA_HOST=http://ollama:11434
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    env_file:
+      - ../.env
+    command:
+      - streamlit
+      - run
+      - dashboard/app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Chat — Streamlit chat interface ───────────────────────────────────────
+  chat:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: udr-chat
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    ports:
+      - "8503:8503"
+    volumes:
+      - ../data:/app/data
+      - ../results:/app/results
+      - ../papers:/app/papers
+      - ../memory:/app/memory
+    environment:
+      - PYTHONPATH=/app
+      - OLLAMA_HOST=http://ollama:11434
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    env_file:
+      - ../.env
+    command:
+      - streamlit
+      - run
+      - chat/app.py
+      - --server.port=8503
+      - --server.address=0.0.0.0
+      - --server.headless=true
+
+volumes:
+  ollama-models:
+    name: udr-ollama-models    # named volume — survives docker compose down

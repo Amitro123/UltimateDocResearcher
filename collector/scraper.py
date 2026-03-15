@@ -72,6 +72,10 @@ async def reddit_top_posts(
         session = aiohttp.ClientSession()
     try:
         async with session.get(url, headers=headers) as resp:
+            if resp.status != 200 or "json" not in resp.content_type:
+                # Reddit now returns 403 + Cloudflare HTML challenge page for
+                # automated requests.  Gracefully return empty rather than crash.
+                return []
             data = await resp.json()
         posts = []
         for child in data.get("data", {}).get("children", []):

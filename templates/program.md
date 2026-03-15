@@ -1,34 +1,32 @@
-# Research Program: claude-skills-optimizer
+# Research Program: UltimateDocResearcher-Reliability
 
 ## Topic
-Anthropic Claude skills and prompt optimization
+LLM evaluation best practices
 
 ## Objective
-Discover the most effective patterns for writing Claude system prompts,
-skills, and multi-turn conversation structures. Identify which instruction
-formats lead to highest task completion and alignment.
+Analyze the current codebase, historical bugs (Issue #18), and research results to identify gaps in reliability, performance, and API handling. Propose concrete code improvements for the research pipeline.
 
 ## Evaluation Criteria
-- Task completion rate on held-out benchmarks
-- Instruction-following precision
-- Reduction in hallucinations
-- Efficiency (tokens used per correct answer)
+- Alignment with "Phase 4: Integration & Polish" goals
+- Resolution of identified bugs in CODE_REVIEW.md
+- Robustness of the Gemini integration and retry logic
+- Completeness of the end-to-end research flow
 
 ## Key Research Questions
-1. What prompt structures produce the most reliable tool-use in Claude?
-2. How do XML tags vs. markdown headers affect Claude's parsing accuracy?
-3. What is the optimal system prompt length for complex agentic tasks?
-4. How does few-shot exemplar order affect Claude's output quality?
-5. What patterns reduce sycophancy in Claude's responses?
+1. How can we improve the robustness of the Gemini API client (beyond simple retries)?
+2. What are the most critical architectural gaps identified in the "Comprehensive Code Review"?
+3. How can we optimize the corpus cleaning and chunking logic for meta-documentation?
+4. What patterns can we extract from "Issue #18" to prevent regressions in evaluation?
+5. How does the E2E guide verify the correctness of the final code suggestions?
 
 ## Preferred Sources
-- https://docs.anthropic.com
-- r/ClaudeAI
-- github.com/anthropics
-- arxiv.org (prompt engineering)
+- local: CODE_REVIEW.md
+- local: UltimateDocResearcher_CR.md
+- local: bug_analysis_eval.md
+- local: AGENTS.md
 
 ## Output Format
-A fine-tuned LoRA adapter + structured prompt template library in JSON
+Structured code suggestions and architectural improvement plan.
 
 ## Model
-unsloth/Llama-3.2-3B-Instruct-bnb-4bit
+gemini-2.5-flash-lite

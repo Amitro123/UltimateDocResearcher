@@ -1,0 +1,57 @@
+# config.yaml — UltimateDocResearcher global configuration
+#
+# All values here can be overridden per-run via CLI flags where supported.
+# Loaded by: code_suggester.py, analyzer.py, new_run.py
+
+# ── Corpus sampling ────────────────────────────────────────────────────────────
+corpus:
+  # How many chars to send to the LLM for code suggestions.
+  # Gemini 2.5 Flash Lite supports 1M input tokens — 40k chars is safe and rich.
+  # Was 12k (4.5% of a 267k corpus). Now 40k = ~15%.
+  window: 40000
+
+  # Hard ceiling — use 80k if you have a large corpus and a model with long context.
+  max_window: 80000
+
+  # Of the window, what fraction should come from EXTERNAL sources (PDFs, web, GitHub).
+  # The remainder is filled from internal docs (project's own files) if needed.
+  # 0.70 = "try to use 70% external content; fall back to internal if not enough"
+  external_fraction: 0.70
+
+  # Minimum fraction of the window that must be external for a warning to NOT be shown.
+  # If external content is below this fraction, the pipeline warns about corpus quality.
+  min_external_fraction: 0.30
+
+# ── Source classification ──────────────────────────────────────────────────────
+sources:
+  # Document titles or paths containing any of these strings (case-insensitive)
+  # are classified as INTERNAL (your own project's files, not external research).
+  # External = PDFs you downloaded, web pages, GitHub repos you scraped.
+  internal_title_patterns:
+    - "ultimatedocresearcher"
+    - "ultimate-doc-researcher"
+    - "ultimate_doc_researcher"
+    - "code_review"
+    - "agents.md"
+    - "claude.md"
+    - "e2e_guide"
+    - "bug_analysis"
+    - "walkthrough"
+    - "udr"           # common abbreviation used in project files
+
+  # Collector source types that are always classified as external
+  # regardless of their title (i.e. PDFs from papers/, web pages, GitHub repos).
+  always_external_sources:
+    - pdf
+    - web
+    - github
+    - reddit
+    - drive
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+eval:
+  # Default judge model if none specified (used by eval.py and run_eval.py)
+  default_judge: "ollama:llama3.2"
+
+  # Default pass threshold (weighted average score 1-5)
+  pass_threshold: 3.5

@@ -10,7 +10,7 @@
 #
 # Pass/fail threshold is set at runtime via --threshold (default: 3.5).
 
-version: "1.0"
+version: "1.2"  # added external_novelty criterion; multi-format deliverable support
 
 criteria:
   - name: clarity
@@ -66,6 +66,34 @@ criteria:
       The best outputs prevent misuse, not just enable correct use.
       Look for: "gotcha" sections, explicit DON'T examples,
       failure modes described alongside success patterns.
+
+  - name: external_novelty
+    question: >
+      Score 1-5: Does the output present insights drawn from EXTERNAL
+      research sources (papers, third-party repos, web articles) rather
+      than just reflecting the project's own existing codebase? Are the
+      patterns genuinely novel — things that would improve or extend
+      the project rather than re-describe what already exists?
+    weight: 1.0
+    description: >
+      Research-driven outputs should surface ideas the developer
+      wouldn't already know from reading their own code.
+      Score 1 if all suggestions mirror existing internal patterns.
+      Score 5 if every suggestion cites or reflects external research
+      with concrete novel application to the topic.
+
+# Multi-format deliverable evaluation notes
+# ──────────────────────────────────────────────────────────────────────────────
+# run_eval.py can evaluate any deliverable:
+#   python -m eval.run_eval --input results/<run_id>/SUMMARY.md
+#   python -m eval.run_eval --input results/<run_id>/IMPLEMENTATION.md
+#   python -m eval.run_eval --input results/<run_id>/RISKS.md
+#
+# For architecture docs, clarity + completeness are most important.
+# For implementation plans, actionability + completeness are most important.
+# For risk registers, completeness + anti_patterns are most important.
+# For benchmarks, freshness + external_novelty are most important.
+# ──────────────────────────────────────────────────────────────────────────────
 
 # Scoring interpretation
 scoring:

@@ -32,7 +32,7 @@ import json
 import re
 import sys
 import textwrap
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -325,7 +325,7 @@ def evaluate(
     passed = weighted_avg >= threshold
 
     summary = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "judge_model": judge_model,
         "input_file": str(input_path),
         "threshold_used": threshold,

@@ -1,3 +1,26 @@
+## 2-minute start
+
+No API key. No Ollama. No GPU. Just Python 3.10+.
+
+```bash
+git clone https://github.com/Amitro123/UltimateDocResearcher
+cd ultimate-doc-researcher
+pip install -r requirements.txt
+make quickstart
+```
+
+Opens the dashboard automatically when done. For the full Docker stack
+(Ollama + Streamlit + all services in one command):
+
+```bash
+make docker-up   # then open http://localhost:8501
+```
+
+See [`quickstart/README_quickstart.md`](quickstart/README_quickstart.md) for
+troubleshooting and the path from demo → your own research topic.
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -23,15 +46,38 @@ graph TD
 
 ## 🚀 Quick Start
 
+### 0. Reset workspace (required before each new topic)
+
+```bash
+# Archives papers/, clears stale data/, resets prompt cache, updates topic
+python new_run.py --topic "your research topic"
+
+# Dry-run first to see what would change
+python new_run.py --topic "your research topic" --dry-run
+
+# Keep the prompt cache when retrying a failed run (avoids redundant API calls)
+python new_run.py --topic "your research topic" --keep-cache
+```
+
+> ⚠️ **Always run `new_run.py` first.** Skipping it causes corpus contamination
+> from previous runs (old PDFs, stale data files, cached LLM responses).
+
+### Test matrix — what works without setup
+
+| Scenario | Status | Notes |
+|----------|--------|-------|
+| No Ollama, no API key | ✅ works | Heuristic mode — lower quality output |
+| No API key, Ollama installed | ✅ works | Full quality, free |
+| API key only (no Ollama) | ✅ works | Gemini / Claude / OpenAI |
+| Fresh clone + `make quickstart` | ✅ works | Built-in demo corpus, no downloads |
+| Docker: `make docker-up` | ✅ works | Full stack, model pulled automatically |
+
 ### 1. Local Setup
 ```bash
 # Clone & install
 git clone https://github.com/Amitro123/UltimateDocResearcher
 cd ultimate-doc-researcher
 pip install -r requirements.txt
-
-# Run a mock research cycle
-python collector/run_mock.py --topic "AI engineering"
 ```
 
 ### 2. Collect documents
@@ -68,6 +114,8 @@ All modules that call an LLM (`eval.py`, `code_suggester.py`, `prepare.py`) shar
 |---|---|---|
 | `gpt-4o-mini` | OpenAI (`OPENAI_API_KEY`) | ~$0.15/1M tokens |
 | `claude-3-5-haiku-20241022` | Anthropic (`ANTHROPIC_API_KEY`) | ~$0.25/1M tokens |
+| `gemini-2.5-flash-lite` | Google Gemini (`GOOGLE_API_KEY`) | Free tier available |
+| `gemini-1.5-flash` | Google Gemini (`GOOGLE_API_KEY`) | Free tier available |
 | `ollama:llama3.2` | Local Ollama | **Free** |
 | `ollama:mistral@http://host:11434` | Remote Ollama | **Free** |
 
@@ -201,6 +249,60 @@ streamlit run dashboard/app.py
 
 Opens at `http://localhost:8501` with four views:
 
+### Multi-Format Research Output (new)
+
+Generate a structured package of research deliverables in one command:
+
+```bash
+python -m autoresearch.research --topic "multi-tenant RAG with Claude tool use"
+```
+
+Output: `results/multi-tenant-rag-with-claude-tool-use-<timestamp>/`
+
+| File | Description |
+|------|-------------|
+| `SUMMARY.md` | Executive overview + key findings |
+| `ARCHITECTURE.md` | System design, component diagram, trade-offs |
+| `IMPLEMENTATION.md` | Step-by-step plan with code patterns & pitfalls |
+| `RISKS.md` | Risk register with likelihood/impact/mitigation table |
+| `BENCHMARKS.md` | Comparison tables and performance numbers |
+| `NEXT_STEPS.md` | Prioritised actions (this week / 1-4 weeks / 1-3 months) |
+| `CODE/code_suggestions.md` | Copy-paste Python patterns (from code_suggester) |
+| `metadata.json` | Run metadata, errors, corpus stats |
+
+The system automatically classifies your topic into one of four research types and generates only the relevant deliverables:
+
+- **`code`** — implementation-heavy topics → SUMMARY + IMPLEMENTATION + NEXT_STEPS + CODE
+- **`arch`** — system design → SUMMARY + ARCHITECTURE + RISKS + NEXT_STEPS + CODE
+- **`process`** — workflow/MLOps → SUMMARY + IMPLEMENTATION + RISKS + NEXT_STEPS + CODE
+- **`market`** — surveys/comparisons → SUMMARY + BENCHMARKS + RISKS + NEXT_STEPS + CODE
+
+```bash
+# Full pipeline: collect → analyze → generate
+python -m autoresearch.research \
+  --topic "LLM evaluation frameworks" \
+  --collect \
+  --pdf-dir papers/ \
+  --model gemini-2.5-flash-lite
+
+# Skip code suggestions (faster)
+python -m autoresearch.research --topic "RAG architecture" --no-code
+
+# View packages in the dashboard
+streamlit run dashboard/app.py  # → Research Packages tab
+```
+
+### Research Chat (new)
+
+```bash
+streamlit run chat/app.py
+```
+
+Opens at `http://localhost:8501` — enter a topic, upload PDFs, add URLs,
+and run the full pipeline interactively with live progress. Output tabs show
+code suggestions, Q&A pairs, and raw logs. Similar past runs are flagged so
+you can reuse cached results instead of re-running.
+
 - **Recent Runs** — table of all runs with score/status, download links for `code_suggestions.md` and `eval-report.json`
 - **Run Explorer** — drill into any run's per-iteration metrics with a val_score line chart
 - **Metrics** — avg_score and pass_rate over time, score by topic bar chart
@@ -235,7 +337,7 @@ python autoresearch/train.py \
 
 ### Prompt cache
 
-The `PromptCache` stores LLM prompt→response pairs in `dashboard/cache/prompts.jsonl`, avoiding redundant API calls:
+The `PromptCache` stores LLM prompt→response pairs in `dashboard/cache/prompts.db` (SQLite), avoiding redundant API calls. Existing `prompts.jsonl` files are automatically migrated on first startup.
 
 ```python
 from memory.cache import PromptCache
@@ -248,6 +350,10 @@ else:
     response = call_llm(...)
     cache.set("Explain LoRA fine-tuning", response, model="ollama:llama3.2")
 ```
+
+> **Starting a new topic?** Run `python new_run.py --topic "..."` — this clears
+> the cache automatically so stale responses from a previous topic don't bleed in.
+> Use `--keep-cache` when *retrying* a failed run to avoid redundant API calls.
 
 ---
 
@@ -278,7 +384,7 @@ ultimate-doc-researcher/
 │   ├── seed_demo.py            # Populate runs.db with demo data
 │   ├── runs.db                 # SQLite run history (auto-created)
 │   └── cache/
-│       └── prompts.jsonl       # Cached LLM prompt→response pairs
+│       └── prompts.db          # Cached LLM prompt→response pairs (SQLite)
 ├── templates/
 │   ├── program.md              # Active research program
 │   └── program_templates.py    # 4 built-in programs + generator
@@ -310,7 +416,7 @@ ultimate-doc-researcher/
 | `GITHUB_TOKEN` | For result commits / higher rate limits | GitHub PAT |
 | `OPENAI_API_KEY` | Optional | Q&A generation, LLM judge, code suggestions |
 | `ANTHROPIC_API_KEY` | Optional | Claude as judge / code suggester |
-| `GOOGLE_API_KEY` | Optional | Google Custom Search |
+| `GOOGLE_API_KEY` | Optional | Google Custom Search & Gemini LLM |
 | `GOOGLE_CX` | Optional | Google CSE engine ID |
 | `GDRIVE_SA_KEY_PATH` | Optional | Service account JSON for Drive |
 
@@ -418,6 +524,56 @@ docker run --rm \
   ultimate-doc-researcher \
   --queries "Claude skills" --reddit MachineLearning
 ```
+
+---
+
+## Troubleshooting
+
+**Code suggestions reflect my own codebase, not external research**
+
+This is the corpus contamination problem. It happens when your `papers/` folder contains internal project files (CODE_REVIEW.md, AGENTS.md, etc.) rather than external PDFs.
+
+After collection, check `data/corpus_report.json` → `external_fraction`. If it's below 0.30, your corpus is mostly internal. Fix:
+
+```bash
+# 1. Reset workspace to clear stale data
+python new_run.py --topic "your topic"
+
+# 2. Add external PDFs — download papers and put them in papers/
+python -m collector.ultimate_collector \
+  --pdf-dir papers/ \
+  --queries "your topic" \
+  --output-dir data/
+
+# 3. Check the fraction in the analyzer output:
+# "External: N chunks (70%) | Internal: M chunks"
+```
+
+The analyzer now writes `data/external_docs.txt` separately. The code suggester uses 70% of its context window from that file and only 30% from the full corpus.
+
+---
+
+**Suggestions still truncate at the last item**
+
+The default `--n-suggestions 5` uses `max_tokens = min(1500×5, 8192) = 7500`. If the model generates a verbose 6th suggestion beyond the 5 requested, it may clip. Use `--n-suggestions 4` for comfortable margin, or `--n-suggestions 6` to explicitly request 6 (budget becomes 8192, close to the Gemini free-tier output limit).
+
+---
+
+**`⚠️ CORPUS QUALITY WARNING: Only X% of chunks are from external sources`**
+
+The analyzer detected that less than 30% of your corpus came from external sources. Add external PDFs or URLs. See "Code suggestions reflect my own codebase" above.
+
+---
+
+**Gemini 429 rate limit errors**
+
+Free-tier Gemini keys hit per-minute quotas. The `llm_client` retries automatically with 15 s → 30 s → 60 s → 120 s backoff. You'll see `⚠️ Gemini rate limit … Retrying in Xs` — this is normal. If it keeps failing after 4 retries, wait 2–3 minutes before retrying the command.
+
+---
+
+**Mixed results from previous runs**
+
+Always run `new_run.py` before starting a new topic. It archives `papers/`, clears `data/` artifacts, and deletes `dashboard/cache/prompts.db` so cached LLM responses from the old topic don't contaminate the new run. Use `--keep-cache` only when retrying a *failed* run on the same topic.
 
 ---
 

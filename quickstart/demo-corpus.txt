@@ -1,0 +1,175 @@
+<DOC_SEP>
+Source: Anthropic SDK Documentation
+Title: Claude Tool Use — Practical Patterns
+
+Claude tool use (also called function calling) allows the model to request
+execution of external functions during a conversation. The model outputs a
+structured tool_use block; your code executes the function and returns a
+tool_result block.
+
+Basic tool definition:
+{
+  "name": "get_weather",
+  "description": "Get current weather for a location",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "location": {"type": "string", "description": "City and country"},
+      "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+    },
+    "required": ["location"]
+  }
+}
+
+Key pattern: Always include a description field. Claude uses descriptions —
+not names — to decide when to call a tool. Vague descriptions like "does stuff"
+will cause the model to use the tool incorrectly or not at all.
+
+The tool_use block appears in content, not as a top-level field:
+content = [{"type": "tool_use", "id": "tu_abc", "name": "get_weather",
+            "input": {"location": "London, UK"}}]
+
+Anti-pattern: Never assume there is only one tool call per turn. Claude can
+request multiple tool calls in a single response. Iterate over content blocks.
+<DOC_SEP>
+Source: GitHub — anthropics/anthropic-sdk-python
+Title: Streaming with Tool Use
+
+Streaming tool calls require accumulating partial JSON across events. The SDK
+provides a streaming helper that handles reassembly:
+
+from anthropic import Anthropic
+client = Anthropic()
+
+with client.messages.stream(
+    model="claude-opus-4-6",
+    max_tokens=1024,
+    tools=[...],
+    messages=[{"role": "user", "content": "What's the weather in Paris?"}],
+) as stream:
+    for event in stream:
+        if event.type == "content_block_stop":
+            block = event.content_block
+            if block.type == "tool_use":
+                print(f"Tool call: {block.name}({block.input})")
+
+The stream helper handles JSON fragment accumulation automatically.
+Without it, you must concatenate input_json_delta events manually.
+
+Anti-pattern: Do not call stream.get_final_message() inside the with block.
+The context manager has not finished reading yet. Call it after the block.
+<DOC_SEP>
+Source: Anthropic Research Blog
+Title: Building Multi-Step Agents with Tool Use
+
+An agentic loop runs until the model stops requesting tool calls:
+
+def run_agent(client, tools, messages, max_turns=10):
+    for _ in range(max_turns):
+        response = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=4096,
+            tools=tools,
+            messages=messages,
+        )
+        if response.stop_reason == "end_turn":
+            return response   # model is done
+        if response.stop_reason != "tool_use":
+            raise ValueError(f"Unexpected stop_reason: {response.stop_reason}")
+
+        # Execute all tool calls and collect results
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = dispatch_tool(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": str(result),
+                })
+
+        # Append assistant turn + tool results and continue
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+
+    return None  # max_turns exceeded
+
+Critical: The tool_use_id in tool_result MUST match the id in tool_use.
+Mismatch causes a 400 error.
+<DOC_SEP>
+Source: Arxiv — "Evaluating LLM Tool Use Reliability" (2025)
+Title: Error handling and retries in tool-calling agents
+
+Study of 500 production agentic pipelines found:
+- 34% of failures caused by unhandled tool errors returned as tool_result
+- 18% caused by max_tokens too small for multi-step reasoning
+- 12% caused by missing tool_use_id in tool_result blocks
+
+Recommended pattern for error handling in tool results:
+
+def safe_dispatch(name, input_data):
+    try:
+        return dispatch_tool(name, input_data)
+    except Exception as e:
+        # Return the error as a string — Claude can reason about it and retry
+        return f"Error: {type(e).__name__}: {e}"
+
+Always return something in tool_result.content. An empty content field or
+missing tool_result for a pending tool call will cause API errors.
+
+For max_tokens: use at least 1024 per expected tool call round-trip.
+For a 5-step agent with 2 tool calls per step, use max_tokens=10240.
+<DOC_SEP>
+Source: Anthropic Developer Forum
+Title: Parallel tool calls and result ordering
+
+Claude can request multiple tool calls in one turn. Results must be returned
+in the same message, one tool_result per tool_use block.
+
+The order does not need to match the request order, but every tool_use id
+must have a corresponding tool_result. Missing results cause a 400 error.
+
+Example of parallel execution:
+
+import asyncio
+
+async def run_parallel_tools(blocks):
+    tasks = []
+    for block in blocks:
+        if block.type == "tool_use":
+            tasks.append(asyncio.create_task(
+                async_dispatch(block.name, block.input, block.id)
+            ))
+    return await asyncio.gather(*tasks)
+
+results = asyncio.run(run_parallel_tools(response.content))
+# results is a list of {"type": "tool_result", "tool_use_id": ..., "content": ...}
+
+This pattern can reduce wall-clock time significantly when tools involve
+I/O (API calls, database queries, file reads).
+<DOC_SEP>
+Source: Anthropic Documentation — Computer Use
+Title: Vision tools and computer use patterns
+
+Computer use tools give Claude the ability to observe and interact with a
+computer screen. The tool names follow a specific convention:
+
+- computer: screenshot, key, type, mouse_move, left_click, right_click,
+            middle_click, double_click, left_click_drag, scroll, wait
+- text_editor: view, create, str_replace, insert, undo_edit
+- bash: run shell commands
+
+All three tools are defined in the Anthropic API under computer-use-2024-10-22
+beta. Enable via the betas parameter:
+
+client.messages.create(
+    model="claude-opus-4-6",
+    betas=["computer-use-2024-10-22"],
+    tools=[{"type": "computer", "name": "computer",
+            "display_width_px": 1280, "display_height_px": 800}],
+    messages=[...]
+)
+
+Anti-pattern: Do not use computer use for tasks that have dedicated APIs.
+Computer use is slow (~1-2s per action). Use it only when no programmatic
+interface exists.

@@ -40,8 +40,25 @@ from typing import Optional
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-# Max corpus chars to send to LLM (keep under context window limits)
-CORPUS_WINDOW = 12_000
+def _load_cfg() -> dict:
+    """Load config.yaml from project root. Returns {} on any failure."""
+    try:
+        import yaml
+        cfg_path = Path(__file__).resolve().parent.parent / "config.yaml"
+        if cfg_path.exists():
+            return yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        pass
+    return {}
+
+_CFG = _load_cfg()
+
+# Max corpus chars to send to LLM — read from config.yaml, default 40k
+# (Gemini 2.5 Flash Lite has 1M context; 40k = 3× improvement over old 12k)
+CORPUS_WINDOW: int = _CFG.get("corpus", {}).get("window", 40_000)
+
+# Fraction of CORPUS_WINDOW that should come from external sources
+_EXTERNAL_FRACTION: float = _CFG.get("corpus", {}).get("external_fraction", 0.70)
 
 # Number of code suggestion "blocks" to request
 N_SUGGESTIONS = 5
@@ -60,18 +77,28 @@ For each concept, provide:
 Format as Markdown with ## headers and ```python blocks.
 Focus on practical, copy-paste-ready code. Avoid vague advice.
 Prefer showing real SDK calls / class structures over pseudocode.
+
+CRITICAL SAFETY: NEVER generate code that writes to the 'results/' or 'data/' 
+directories in its demo/test blocks. Use print() or dummy objects instead.
 """
 
 CORPUS_PROMPT_TEMPLATE = """\
 Research topic: {topic}
 
---- Corpus extract (first {n_chars} chars) ---
+{source_note}
+--- Corpus extract ({n_chars} chars) ---
 {corpus_extract}
 --- End of extract ---
 
-Based on the above, generate {n_suggestions} concrete Python code \
-suggestions that a developer could use RIGHT NOW to apply these findings. \
-Focus on the most novel or non-obvious patterns in the corpus.
+Based on the above, generate {n_suggestions} concrete Python code suggestions \
+that a developer could use RIGHT NOW to apply these findings.
+
+IMPORTANT:
+- Prioritize insights from EXTERNAL sources (papers, GitHub repos, web articles) \
+over patterns already in the project's own codebase.
+- Generate NOVEL patterns that improve or extend existing code, not patterns \
+that just describe what already exists.
+- Focus on the most non-obvious, research-backed techniques.
 """
 
 
@@ -83,6 +110,7 @@ def _call_llm(
     model: str = "gpt-4o-mini",
     api_base: Optional[str] = None,
     n_suggestions: int = N_SUGGESTIONS,
+    source_note: str = "",
 ) -> str:
     """Call LLM to generate code suggestions.
     "ollama:llama3.2"  → local Ollama (free, no key needed)
@@ -97,13 +125,14 @@ def _call_llm(
         n_chars=len(corpus_extract),
         corpus_extract=corpus_extract,
         n_suggestions=n_suggestions,
+        source_note=source_note,
     )
     try:
         return chat(
             messages=[{"role": "user", "content": user_content}],
             model=effective_model,
             system=SYSTEM_PROMPT,
-            max_tokens=4096,
+            max_tokens=min(1500 * n_suggestions, 8192),
             temperature=0.3,
             api_base=api_base,
         )
@@ -295,9 +324,8 @@ def _detect_topic(corpus: str, program_md_path: Optional[Path] = None) -> str:
 
 def _sample_corpus(corpus: str, max_chars: int = CORPUS_WINDOW) -> str:
     """
-    Select the most representative portion of the corpus for the LLM prompt.
-    Strategy: take chunks spread across the corpus (beginning, middle, end)
-    to maximise coverage within the token budget.
+    Select the most representative portion of a corpus for the LLM prompt.
+    Strategy: beginning + middle + end spread to maximise coverage.
     """
     if len(corpus) <= max_chars:
         return corpus
@@ -308,6 +336,52 @@ def _sample_corpus(corpus: str, max_chars: int = CORPUS_WINDOW) -> str:
     middle = corpus[mid_start: mid_start + third]
     end = corpus[-third:]
     return f"{beginning}\n\n[...middle sample...]\n\n{middle}\n\n[...end sample...]\n\n{end}"
+
+
+def _sample_corpus_weighted(
+    corpus_path: Path,
+    max_chars: int = CORPUS_WINDOW,
+    external_fraction: float = _EXTERNAL_FRACTION,
+) -> tuple[str, str]:
+    """
+    Build a corpus sample that prioritises external research sources.
+
+    Looks for data/external_docs.txt (written by analyzer.py) alongside
+    the main corpus. If found, fills `external_fraction` of the window
+    from it and the remainder from the main corpus (which may include
+    internal docs).
+
+    Returns (sampled_text, source_note) where source_note is a one-line
+    header explaining the mix — included in the LLM prompt for transparency.
+    """
+    external_path = corpus_path.parent / "external_docs.txt"
+    main_corpus = corpus_path.read_text(encoding="utf-8", errors="ignore")
+
+    if not external_path.exists():
+        # No split available — use full corpus with a note
+        sampled = _sample_corpus(main_corpus, max_chars)
+        note = "(Using combined corpus — run analyzer.py to enable external-first sampling)"
+        return sampled, note
+
+    external_corpus = external_path.read_text(encoding="utf-8", errors="ignore")
+    ext_budget = int(max_chars * external_fraction)
+    int_budget = max_chars - ext_budget
+
+    ext_sample = _sample_corpus(external_corpus, ext_budget)
+    int_sample = _sample_corpus(main_corpus, int_budget)
+
+    # External content first in the prompt
+    combined = ext_sample
+    if int_sample.strip():
+        combined += f"\n\n[--- Additional context from project codebase ---]\n\n{int_sample}"
+
+    ext_pct = int(external_fraction * 100)
+    int_pct = 100 - ext_pct
+    note = (
+        f"(Corpus mix: ~{ext_pct}% external research sources, "
+        f"~{int_pct}% project codebase context)"
+    )
+    return combined, note
 
 
 # ── Markdown wrapper ──────────────────────────────────────────────────────────
@@ -375,7 +449,7 @@ def generate_suggestions(
     Returns:
         Full Markdown string (also written to output_path)
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     corpus_path = Path(corpus_path)
     output_path = Path(output_path)
@@ -392,8 +466,9 @@ def generate_suggestions(
         topic = _detect_topic(corpus, Path(program_md))
     print(f"[code_suggester] Topic: {topic}")
 
-    # Sample corpus to fit in context window
-    extract = _sample_corpus(corpus, max_corpus_chars)
+    # External-weighted sampling (70% external research, 30% internal codebase)
+    extract, source_note = _sample_corpus_weighted(corpus_path, max_corpus_chars)
+    print(f"[code_suggester] Corpus sample: {len(extract):,} chars  {source_note}")
 
     # Resolve model: explicit arg → best available → heuristic
     from autoresearch.llm_client import best_available_model
@@ -408,13 +483,14 @@ def generate_suggestions(
         model=effective_model,
         api_base=api_base,
         n_suggestions=n_suggestions,
+        source_note=source_note,
     )
 
     # Wrap in report
     stats = {
         "chunks": corpus.count("\n\n"),
         "chars": len(corpus),
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     }
     full_report = _wrap_in_report(suggestions_md, topic, stats)
 

@@ -35,8 +35,9 @@ USER appuser
 # Expose Streamlit dashboard port
 EXPOSE 8501
 
-# Explicitly set the path for the data directory
-ENV DATA_DIR=/app/data
+# Runtime env — overridden by docker-compose.yml
+ENV DATA_DIR=/app/data \
+    OLLAMA_HOST=http://localhost:11434
 
-# Default command
-CMD ["python", "collector/ultimate_collector.py", "--help"]
+# Default: show available commands
+CMD ["python", "-m", "autoresearch.llm_client", "check"]

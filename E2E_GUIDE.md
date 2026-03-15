@@ -15,7 +15,7 @@ Your question / project
         │
         ▼
   2. ANALYZE       ← quality filter, dedup, chunking
-        │
+        │             writes external_docs.txt (70% of LLM window)
         ▼
   3. PREPARE       ← Q&A generation  (NotebookLM → LLM → heuristic)
         │
@@ -24,15 +24,24 @@ Your question / project
         │
         ▼
   5. SUGGEST       ← code snippets derived from your research
-        │                        ↑ prompt cache (dashboard/cache/)
+        │                        ↑ prompt cache (prompts.db / SQLite)
         ▼
-  6. EVAL (output) ← 5-criteria score on code_suggestions.md
+  6. EVAL (output) ← 6-criteria score on code_suggestions.md
+        │
+        ├─── results/eval-report.json  +  results/code_suggestions.md
         │
         ▼
-  results/eval-report.json  +  results/code_suggestions.md
+  5alt. RESEARCH PACKAGE  ← multi-format deliverables for any topic type
+        │     python -m autoresearch.research --topic "..."
+        ▼
+  results/<run-id>/
+    SUMMARY.md  ARCHITECTURE.md  IMPLEMENTATION.md
+    RISKS.md    BENCHMARKS.md    NEXT_STEPS.md
+    CODE/code_suggestions.md     metadata.json
         │
         ▼
-  7. DASHBOARD     ← run history, metrics, topic dedup (dashboard/app.py)
+  7. DASHBOARD     ← run history, metrics, Research Packages tab
+                     (dashboard/app.py)
 ```
 
 Steps 4–6 run without a GPU. Step 3 is free with Ollama.
@@ -61,7 +70,13 @@ export ANTHROPIC_API_KEY=sk-ant-...
 # Option C — OpenAI
 export OPENAI_API_KEY=sk-...
 
-# Option D — NotebookLM (best for PDFs, needs browser auth once)
+# Option D — Google Gemini (free tier available)
+pip install google-generativeai
+export GOOGLE_API_KEY=AIza...
+# Free-tier keys are rate-limited per minute. The client retries automatically
+# (15 s → 30 s → 60 s → 120 s). If you hit sustained 429s, wait a few minutes.
+
+# Option E — NotebookLM (best for PDFs, needs browser auth once)
 pip install "notebooklm-py[browser]"
 playwright install chromium
 notebooklm login                  # opens browser once to authenticate
@@ -79,6 +94,36 @@ python -m autoresearch.llm_client auto       # what's the best model available?
 
 This is a real simulation of using UltimateDocResearcher to research
 how to improve a Claude skills creator / project rules generator.
+
+### Step 0 — Reset the workspace (required before every new topic)
+
+> **Skip this and your new research will be contaminated by the previous run.**
+> `papers/` accumulates old PDFs, `data/` retains stale artifacts, the prompt
+> cache serves old LLM responses for similar-sounding prompts, and
+> `templates/program.md` still describes the last topic.
+
+```bash
+python new_run.py --topic "Improving project-rules-generator skill for Claude"
+```
+
+What it does:
+- Archives everything in `papers/` → `papers/.archive/<timestamp>/` (safe, not deleted)
+- Clears stale `data/` artifacts (`all_docs*.txt`, `train.jsonl`, `val.jsonl`, etc.)
+- Clears the LLM prompt cache (`dashboard/cache/prompts.jsonl`) so stale
+  responses from a previous "skills" run don't bleed into the new one
+- Rewrites the `## Topic` line in `templates/program.md`
+
+Preview what it would do without making changes:
+```bash
+python new_run.py --topic "..." --dry-run
+```
+
+Retrying a failed run (keep cache to avoid redundant API calls):
+```bash
+python new_run.py --topic "..." --keep-cache
+```
+
+---
 
 ### Step 1 — Collect your sources
 
@@ -113,6 +158,12 @@ The Claude skills PDF from your Downloads folder is a perfect source here:
 cp ~/Downloads/The-Complete-Guide-to-Building-Skill-for-Claude.pdf papers/
 python -m collector.ultimate_collector --pdf-dir papers/ --output-dir data/
 ```
+
+> **Watch out for self-referential documents.** If you provide files like
+> `CODE_REVIEW.md` or `UltimateDocResearcher_CR.md` as sources, their
+> references to earlier topics ("Issue #18", "Skills") will leak into your
+> corpus and contaminate the Q&A pairs. Only put actual research sources in
+> `papers/`.
 
 After collection, `data/all_docs.txt` contains everything separated by `<DOC_SEP>`.
 
@@ -268,6 +319,58 @@ The full report is saved to `results/eval-report.json`.
 
 ---
 
+### Step 5c — (Alternative) Generate a full research package
+
+Instead of (or in addition to) Step 5, you can generate a complete set of
+structured deliverables in one command. This is best when you want more than
+just code snippets — for example, an implementation plan, a risk register,
+or a benchmark comparison.
+
+```bash
+python -m autoresearch.research \
+  --topic "Improving project-rules-generator skill for Claude"
+```
+
+The system **automatically classifies your topic** and generates only the
+relevant files:
+
+| Topic type | Example | Files generated |
+|------------|---------|----------------|
+| `code` | "Claude SDK tool use patterns" | SUMMARY + IMPLEMENTATION + NEXT_STEPS + CODE |
+| `arch` | "Streaming data pipeline architecture" | SUMMARY + ARCHITECTURE + RISKS + NEXT_STEPS + CODE |
+| `process` | "Fine-tuning LLMs with RLHF" | SUMMARY + IMPLEMENTATION + RISKS + NEXT_STEPS + CODE |
+| `market` | "Survey of LLM eval frameworks" | SUMMARY + BENCHMARKS + RISKS + NEXT_STEPS + CODE |
+
+Output goes to `results/<topic-slug>-<timestamp>/`. Open the **Research
+Packages** tab in the dashboard to browse and download any deliverable.
+
+```bash
+# Check what type your topic would classify as before running:
+python -c "
+from research_deliverables.classify_topic import classify_topic
+ds = classify_topic('your topic here')
+print(ds.research_type, ds.deliverables)
+"
+
+# Full pipeline in one command (collect + analyze + generate):
+python -m autoresearch.research \
+  --topic "multi-tenant RAG with Claude tool use" \
+  --collect \
+  --pdf-dir papers/ \
+  --model gemini-2.5-flash-lite
+
+# Skip code suggestions (faster, useful if you ran code_suggester separately):
+python -m autoresearch.research --topic "RAG architecture" --no-code
+```
+
+You can also eval each deliverable individually:
+```bash
+python -m eval.run_eval --input results/<run-id>/IMPLEMENTATION.md --threshold 3.5
+python -m eval.run_eval --input results/<run-id>/RISKS.md --threshold 3.5
+```
+
+---
+
 ### Step 6 — (Optional) Train a fine-tuned model
 
 Only needed if you want a model that answers questions about your corpus
@@ -350,6 +453,9 @@ python -m autoresearch.eval \
 
 | Goal | Command |
 |------|---------|
+| **Reset before new topic** | `python new_run.py --topic "your topic"` |
+| Reset (keep cache) | `python new_run.py --topic "your topic" --keep-cache` |
+| Reset dry-run | `python new_run.py --topic "your topic" --dry-run` |
 | Collect PDFs only | `python -m collector.ultimate_collector --pdf-dir papers/ --output-dir data/` |
 | Collect from web | `python -m collector.ultimate_collector --queries "topic" --output-dir data/` |
 | Clean corpus | `python -c "from collector.analyzer import analyze_corpus; analyze_corpus('data/all_docs.txt', 'data/')"` |
@@ -358,7 +464,12 @@ python -m autoresearch.eval \
 | Prepare (NotebookLM) | `python autoresearch/prepare.py --source-type notebooklm --pdf-sources papers/*.pdf` |
 | Eval Q&A quality | `python -m autoresearch.eval --val-path data/val.jsonl --judge-model ollama:llama3.2` |
 | Code suggestions | `python -m autoresearch.code_suggester --corpus data/all_docs_cleaned.txt --model ollama:llama3.2` |
+| **Multi-format package** | `python -m autoresearch.research --topic "your topic"` |
+| Multi-format (full pipeline) | `python -m autoresearch.research --topic "X" --collect --pdf-dir papers/` |
+| Multi-format (no code) | `python -m autoresearch.research --topic "X" --no-code` |
+| Check topic type | `python -c "from research_deliverables.classify_topic import classify_topic; print(classify_topic('topic').research_type)"` |
 | **Score output quality** | `python -m eval.run_eval --input results/code_suggestions.md --judge ollama:llama3.2` |
+| Score any deliverable | `python -m eval.run_eval --input results/<run-id>/RISKS.md --judge ollama:llama3.2` |
 | **Batch score outputs** | `python -m eval.run_eval --input results/*.md --judge ollama:llama3.2` |
 | Check LLM setup | `python -m autoresearch.llm_client check` |
 | Auto-detect model | `python -m autoresearch.llm_client auto` |
@@ -407,6 +518,12 @@ starting. If a past run covered similar ground (cosine similarity ≥ 0.85),
 the dashboard warns you and offers to reuse the existing output instead of
 burning API credits.
 
+**Research Packages** — browse all multi-format packages generated by
+`python -m autoresearch.research`. Select a package from the dropdown to
+view its deliverables (SUMMARY, ARCHITECTURE, IMPLEMENTATION, RISKS,
+BENCHMARKS, NEXT_STEPS, CODE) in tabs, with per-file download buttons and
+a regenerate command.
+
 ### How the memory system works
 
 Every `research_loop()` call automatically integrates with the memory
@@ -432,12 +549,17 @@ python autoresearch/train.py \
 ### Prompt cache
 
 All `chat()` calls in `autoresearch/llm_client.py` are automatically
-cached in `dashboard/cache/prompts.jsonl`. The cache does two lookups
+cached in `memory/prompts.db` (SQLite). The cache does two lookups
 before hitting the LLM:
 
-1. **Exact** — SHA1 hash of the full prompt + model string
-2. **Fuzzy** — cosine similarity ≥ 0.92 against all cached prompts for
+1. **Exact** — SHA1 hash of the full prompt + model string → O(1) lookup
+2. **Fuzzy** — cosine similarity ≥ 0.92 against cached prompts for
    the same model (catches rephrased-but-identical questions)
+
+> **Note:** The cache migrated from `dashboard/cache/prompts.jsonl`
+> (O(n) rewrite on every write) to SQLite in `memory/prompts.db`
+> (O(1) upserts). If you have an old `prompts.jsonl` it is auto-migrated
+> on first run — you can delete it afterwards.
 
 Cache hits are returned instantly with zero API cost. To bypass the cache
 for a single call, pass `use_cache=False`:
@@ -449,12 +571,21 @@ from autoresearch.llm_client import chat
 reply = chat(messages, model="ollama:llama3.2", use_cache=False)
 ```
 
-To inspect or clear the cache:
+> **Important — new topic = clear the cache.**
+> The fuzzy matcher at 0.92 similarity will serve cached responses from a
+> previous "skills" run when you start a new "skills" run, even if the corpus
+> is completely different. `new_run.py` clears the cache automatically.
+> If you need to keep the cache (e.g. retrying a failed run), use:
+> ```bash
+> python new_run.py --topic "..." --keep-cache
+> ```
+
+To inspect or clear the cache manually:
 
 ```python
 from memory.cache import PromptCache
 c = PromptCache()
-print(c.stats())   # {"total_entries": 42, "total_size_bytes": 18400, ...}
+print(c.stats())   # {"total_entries": 42, "total_hits": 18, ...}
 c.clear()          # wipe all cached responses
 ```
 
@@ -469,9 +600,13 @@ Do you have Ollama running locally?
     Do you have ANTHROPIC_API_KEY?
       YES → use claude-3-5-haiku-20241022 (best quality, ~$0.01 per run)
       NO  →
-        Do you have OPENAI_API_KEY?
-          YES → use gpt-4o-mini
-          NO  → use heuristic (always works, lower Q&A quality)
+        Do you have GOOGLE_API_KEY?
+          YES → use gemini-1.5-flash (free tier available; expect 429 rate-limit
+                retries on free keys — built-in backoff handles this automatically)
+          NO  →
+            Do you have OPENAI_API_KEY?
+              YES → use gpt-4o-mini
+              NO  → use heuristic (always works, lower Q&A quality)
 
 For prepare.py specifically:
   Do you have PDFs and notebooklm-py installed?
@@ -487,17 +622,26 @@ For prepare.py specifically:
 |------|-----------------|-------------------|
 | `data/all_docs.txt` | Raw collected documents | Debug collection issues |
 | `data/all_docs_cleaned.txt` | Quality-filtered chunks | Input to prepare.py |
-| `data/corpus_report.json` | Per-doc quality scores | Find weak sources |
+| `data/external_docs.txt` | External-only chunks (tagged by analyzer) | Used for 70% of LLM window |
+| `data/corpus_report.json` | Per-doc quality scores + external fraction | Find weak/internal-only sources |
 | `data/train.jsonl` | Training Q&A pairs | Input to train.py |
 | `data/val.jsonl` | Your research questions | READ THIS — it's your agenda |
 | `results/eval_report.json` | Q&A judge scores per sample | Find corpus gaps |
 | `results/eval_report.json` → `worst_samples` | Lowest-scored Q&As | Where to add more sources |
-| `results/code_suggestions.md` | Copy-paste code snippets | Your main deliverable |
-| `results/eval-report.json` | 5-criteria output quality score | Is the output good enough? |
+| `results/code_suggestions.md` | Copy-paste code snippets | Quick deliverable |
+| `results/eval-report.json` | 6-criteria output quality score | Is the output good enough? |
 | `results/eval-report.json` → `criterion_scores` | Per-criterion breakdown | What specifically to improve |
+| `results/<run-id>/SUMMARY.md` | Executive overview + key findings | Start here when sharing results |
+| `results/<run-id>/ARCHITECTURE.md` | Component diagram, data flow, trade-offs | Architecture / system design topics |
+| `results/<run-id>/IMPLEMENTATION.md` | Step-by-step plan, code patterns, pitfalls | Implementation / process topics |
+| `results/<run-id>/RISKS.md` | Risk register table + mitigations | Before starting any major build |
+| `results/<run-id>/BENCHMARKS.md` | Comparison tables + performance numbers | Survey / market topics |
+| `results/<run-id>/NEXT_STEPS.md` | Prioritised actions (this week / 1 month) | After reading the summary |
+| `results/<run-id>/CODE/code_suggestions.md` | Copy-paste snippets inside a package | Your main code deliverable |
+| `results/<run-id>/metadata.json` | Run ID, topic type, corpus stats, errors | Debug or re-run a package |
 | `results/results.tsv` | Training metrics per iteration | Track model improvement |
 | `dashboard/runs.db` | SQLite history of all runs + metrics | Query with any SQLite tool |
-| `dashboard/cache/prompts.jsonl` | Cached LLM prompt→response pairs | Inspect cache hits/misses |
+| `memory/prompts.db` | SQLite prompt cache (O(1) lookups, fuzzy match) | Inspect or clear cache |
 
 ---
 
@@ -532,3 +676,36 @@ what's reachable, then pass `--judge ollama:llama3.2` (local) or set an API key.
 → These measure different things. Q&A eval scores training data quality.
 Output eval scores whether `code_suggestions.md` is clear, complete, and actionable.
 Add higher-quality corpus sources, then re-run code_suggester.
+
+**Results look like a previous run / wrong topic appearing in output**
+→ You skipped `new_run.py`. Old PDFs in `papers/`, stale `data/` files, or a
+cached prompt response from the last run are bleeding into this one.
+Fix: `python new_run.py --topic "your topic"` then start from Step 1.
+
+**Gemini 429 "quota_id: GenerateRequestsPerMinutePerProjectPerModel-FreeTier"**
+→ Free-tier keys are rate-limited per minute. The client retries automatically
+with exponential back-off (15 s → 30 s → 60 s → 120 s) — you'll see
+`⚠️ Gemini rate limit` in stderr. If it keeps failing after all retries,
+wait 2–3 minutes before re-running. To permanently avoid this, enable
+Pay-as-you-go billing on the project in Google Cloud Console.
+
+**Research package generates wrong deliverable type**
+→ `classify_topic()` uses keyword matching. Check what it returns:
+`python -c "from research_deliverables.classify_topic import classify_topic; print(classify_topic('your topic').research_type)"`
+If the classification is wrong, override with a more specific topic string
+(e.g. "Architecture of …" for arch, "Survey of …" for market).
+
+**Research package deliverable is shallow / LLM-only content**
+→ The generators are only as good as the corpus. If ARCHITECTURE.md reads
+like generic advice, your corpus has too few external architecture sources.
+Go back to Step 1, add PDFs or GitHub repos on that specific aspect, then
+re-run: `python -m autoresearch.research --topic "..." --no-code`
+
+**`jinja2` not found when running `autoresearch.research`**
+→ `pip install jinja2` (or `pip install -r requirements.txt`).
+The generators fall back to a plain key=value format if Jinja2 is missing,
+but the output won't be properly formatted Markdown.
+
+**"Research Packages" dashboard tab shows no packages**
+→ No `metadata.json` files found under `results/`. Generate a package first:
+`python -m autoresearch.research --topic "your topic"`

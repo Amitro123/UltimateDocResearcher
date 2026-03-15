@@ -255,10 +255,14 @@ class TestChatFunction(unittest.TestCase):
 
     def test_ollama_chat_returns_reply(self):
         from autoresearch.llm_client import chat
-        with patch("urllib.request.urlopen", return_value=self._openai_mock("  hello world  ")):
+        # Patch _openai_sdk so the OpenAI SDK (if installed) is skipped and
+        # the pure-urllib fallback is exercised by our mock.
+        with patch("autoresearch.llm_client._openai_sdk", side_effect=ImportError), \
+             patch("urllib.request.urlopen", return_value=self._openai_mock("  hello world  ")):
             result = chat(
                 messages=[{"role": "user", "content": "Say hi"}],
                 model="ollama:llama3.2",
+                use_cache=False,
             )
         self.assertEqual(result, "hello world")
 
@@ -270,11 +274,13 @@ class TestChatFunction(unittest.TestCase):
             captured_body.update(json.loads(req.data.decode()))
             return self._openai_mock("ok")
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("autoresearch.llm_client._openai_sdk", side_effect=ImportError), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
             chat(
                 messages=[{"role": "user", "content": "Q"}],
                 model="ollama:llama3.2",
                 system="You are helpful.",
+                use_cache=False,
             )
 
         msgs = captured_body.get("messages", [])
@@ -290,11 +296,13 @@ class TestChatFunction(unittest.TestCase):
             captured_url["url"] = req.full_url
             return self._openai_mock("ok")
 
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        with patch("autoresearch.llm_client._openai_sdk", side_effect=ImportError), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen):
             chat(
                 messages=[{"role": "user", "content": "Q"}],
                 model="ollama:llama3.2",
                 api_base="http://custom-host:11434",
+                use_cache=False,
             )
 
         self.assertIn("custom-host", captured_url["url"])
@@ -308,14 +316,16 @@ class TestChatFunction(unittest.TestCase):
             return self._openai_mock("response")
 
         import os
-        with patch("urllib.request.urlopen", side_effect=fake_urlopen), \
+        # Patch _openai_sdk to raise ImportError so we always hit the urllib
+        # path — reliable across environments regardless of SDK install state.
+        with patch("autoresearch.llm_client._openai_sdk", side_effect=ImportError), \
+             patch("urllib.request.urlopen", side_effect=fake_urlopen), \
              patch.dict(os.environ, {"OPENAI_API_KEY": "sk-real-key"}):
-            # Force SDK import to fail so urllib path is used
-            with patch.dict(sys.modules, {"openai": None}):
-                chat(
-                    messages=[{"role": "user", "content": "Q"}],
-                    model="gpt-4o-mini",
-                )
+            chat(
+                messages=[{"role": "user", "content": "Q"}],
+                model="gpt-4o-mini",
+                use_cache=False,
+            )
 
         self.assertIn("sk-real-key", captured.get("auth", ""))
 

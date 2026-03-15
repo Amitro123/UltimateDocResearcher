@@ -32,7 +32,7 @@ import re
 import statistics
 import sys
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -222,6 +222,11 @@ def run_eval(
     Returns:
         report dict with summary + per-sample results
     """
+    # Ensure judge_model is always a string (CLI passes None when flag is omitted)
+    if judge_model is None:
+        from autoresearch.llm_client import best_available_model
+        judge_model = best_available_model()
+
     val_path = Path(val_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -286,15 +291,22 @@ def run_eval(
         print("[eval] ⚠️  No results produced — check val.jsonl format or LLM availability")
         return {}
 
+    def _get_score(r: SampleResult, attr: str, default: float = 3.0) -> float:
+        """Safely extract a score attribute from JudgeScores or a plain dict fallback."""
+        scores = r.scores
+        if isinstance(scores, dict):
+            return float(scores.get(attr, default))
+        return float(getattr(scores, attr, default))
+
     # Aggregate
-    all_overall = [r.scores.overall for r in results]
-    all_acc = [r.scores.accuracy for r in results]
-    all_rel = [r.scores.relevance for r in results]
-    all_comp = [r.scores.completeness for r in results]
+    all_overall = [_get_score(r, "overall") for r in results]
+    all_acc = [_get_score(r, "accuracy") for r in results]
+    all_rel = [_get_score(r, "relevance") for r in results]
+    all_comp = [_get_score(r, "completeness") for r in results]
     pass_rate = sum(r.passed for r in results) / len(results)
 
     summary = {
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "iteration": iteration,
         "topic": topic,
         "judge_model": judge_model,
@@ -326,7 +338,7 @@ def run_eval(
 
     # Write report
     report_path = output_dir / "eval_report.json"
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # Pretty-print summary
     _print_summary(summary)
@@ -372,6 +384,7 @@ def _print_summary(summary: dict) -> None:
 
 if __name__ == "__main__":
     import argparse
+    import traceback
 
     parser = argparse.ArgumentParser(description="LLM-as-a-Judge evaluator")
     parser.add_argument("--val-path", default="data/val.jsonl")
@@ -386,14 +399,19 @@ if __name__ == "__main__":
     parser.add_argument("--topic", default="")
     args = parser.parse_args()
 
-    run_eval(
-        val_path=args.val_path,
-        model_path=args.model_path,
-        judge_model=args.judge_model,
-        judge_api_base=args.judge_api_base,
-        max_samples=args.max_samples,
-        pass_threshold=args.pass_threshold,
-        output_dir=args.output_dir,
-        iteration=args.iteration,
-        topic=args.topic,
-    )
+    try:
+        run_eval(
+            val_path=args.val_path,
+            model_path=args.model_path,
+            judge_model=args.judge_model,
+            judge_api_base=args.judge_api_base,
+            max_samples=args.max_samples,
+            pass_threshold=args.pass_threshold,
+            output_dir=args.output_dir,
+            iteration=args.iteration,
+            topic=args.topic,
+        )
+    except Exception:
+        sys.stderr.write("\n[eval] Fatal error:\n")
+        traceback.print_exc()
+        sys.exit(1)

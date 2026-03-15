@@ -11,6 +11,7 @@ Supports three providers via a single model-string convention:
   Anthropic    "claude-3-5-haiku-20241022"  "claude-opus-4-6"
   Ollama       "ollama:llama3.2"  "ollama:mistral"  "ollama:phi4"
                "ollama:llama3.2@http://remote-host:11434"
+Gemini       "gemini-1.5-flash"  "gemini-1.5-pro"
 
 Usage:
     from autoresearch.llm_client import chat, check_ollama, list_ollama_models
@@ -38,6 +39,12 @@ import time
 import urllib.error
 import urllib.request
 from typing import Optional
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+except ImportError:
+    pass
 
 # ── Retry helper ─────────────────────────────────────────────────────────────
 
@@ -117,6 +124,9 @@ def parse_model(model: str) -> tuple[str, str, Optional[str]]:
 
     if model.startswith("claude"):
         return "anthropic", model, None
+
+    if model.startswith("gemini"):
+        return "google", model, None
 
     # Default: OpenAI-compatible
     return "openai", model, None
@@ -208,6 +218,8 @@ def chat(
 
     if provider == "anthropic":
         reply = _chat_anthropic(messages, model_name, max_tokens, temperature)
+    elif provider == "google":
+        reply = _chat_google(messages, model_name, max_tokens, temperature)
     elif provider == "ollama":
         reply = _chat_openai_compat(
             messages, model_name, max_tokens, temperature,
@@ -370,6 +382,97 @@ def _urllib_anthropic(messages, model, system, max_tokens, temperature,
     return _with_retries(_do_request, retries=retries)
 
 
+def _is_gemini_rate_limit(exc: Exception) -> bool:
+    """Return True if *exc* looks like a Gemini 429 / quota error."""
+    msg = str(exc).lower()
+    return (
+        "429" in str(exc)
+        or "resource_exhausted" in msg
+        or "quota" in msg
+        or "rate" in msg
+    )
+
+
+def _chat_google(
+    messages: list[dict],
+    model: str,
+    max_tokens: int,
+    temperature: float,
+    retries: int = 4,
+    base_delay: float = 15.0,   # free-tier needs longer gaps than typical APIs
+) -> str:
+    """
+    Google Gemini implementation via native SDK.
+
+    Automatically retries on 429 / ResourceExhausted errors with exponential
+    back-off.  Free-tier keys hit per-minute quotas quickly, so the default
+    base_delay is 15 s (doubles each attempt: 15 → 30 → 60 → 120 s).
+    """
+    import random
+
+    system = ""
+    filtered = []
+    for m in messages:
+        if m["role"] == "system":
+            system = m["content"]
+        else:
+            filtered.append(m)
+
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        raise RuntimeError(
+            "google-generativeai SDK not installed. Run: pip install google-generativeai"
+        )
+
+    api_key = os.getenv("GOOGLE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GOOGLE_API_KEY not set")
+    genai.configure(api_key=api_key)
+
+    model_instance = genai.GenerativeModel(
+        model_name=model,
+        system_instruction=system if system else None,
+    )
+
+    # Gemini expects [{"role": "user"|"model", "parts": [...]}]
+    history = []
+    for m in filtered[:-1]:
+        role = "user" if m["role"] == "user" else "model"
+        history.append({"role": role, "parts": [m["content"]]})
+
+    last_msg = filtered[-1]["content"] if filtered else ""
+
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            chat_session = model_instance.start_chat(history=history)
+            resp = chat_session.send_message(
+                last_msg,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+            )
+            return resp.text.strip()
+        except Exception as exc:
+            if _is_gemini_rate_limit(exc) and attempt < retries - 1:
+                last_exc = exc
+                delay = base_delay * (2 ** attempt) + random.uniform(0, 5)
+                print(
+                    f"  ⚠️  Gemini rate limit (attempt {attempt + 1}/{retries}): {exc}\n"
+                    f"     Retrying in {delay:.0f}s …",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+            else:
+                raise RuntimeError(f"Gemini API call failed: {exc}") from exc
+
+    raise RuntimeError(
+        f"Gemini API call failed after {retries} attempts. Last error: {last_exc}"
+    ) from last_exc
+
+
 # ── Convenience: detect best available model ──────────────────────────────────
 
 def best_available_model(prefer_ollama_model: str = "llama3.2") -> str:
@@ -391,6 +494,10 @@ def best_available_model(prefer_ollama_model: str = "llama3.2") -> str:
 
     if os.getenv("ANTHROPIC_API_KEY"):
         return "claude-3-5-haiku-20241022"
+
+    if os.getenv("GOOGLE_API_KEY"):
+        # Prioritize 2.5-flash-lite as requested, then 1.5, then 2.0
+        return "gemini-2.5-flash-lite"
 
     if os.getenv("OPENAI_API_KEY"):
         return "gpt-4o-mini"

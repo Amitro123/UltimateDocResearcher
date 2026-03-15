@@ -29,6 +29,64 @@ class DocStats:
     sentences: int
     quality_score: float        # 0.0 – 1.0
     filter_reason: str = ""     # non-empty when rejected; explains why
+    source_type: str = "external"  # "external" | "internal"
+
+
+# ── Config loader ──────────────────────────────────────────────────────────────
+
+def _load_config() -> dict:
+    """Load config.yaml from project root. Returns {} if not found."""
+    try:
+        import yaml
+        cfg_path = Path(__file__).resolve().parent.parent / "config.yaml"
+        if cfg_path.exists():
+            return yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        pass
+    return {}
+
+
+# ── Internal source detection ──────────────────────────────────────────────────
+
+_DEFAULT_INTERNAL_PATTERNS = [
+    "ultimatedocresearcher", "ultimate-doc-researcher", "ultimate_doc_researcher",
+    "code_review", "agents.md", "claude.md", "e2e_guide",
+    "bug_analysis", "walkthrough", "udr",
+]
+
+_ALWAYS_EXTERNAL_SOURCES = {"pdf", "web", "github", "reddit", "drive"}
+
+
+def _build_internal_patterns(cfg: dict) -> list[str]:
+    return (
+        cfg.get("sources", {}).get("internal_title_patterns")
+        or _DEFAULT_INTERNAL_PATTERNS
+    )
+
+
+def is_internal_doc(title: str, source: str, cfg: dict | None = None) -> bool:
+    """
+    Return True if this document is from the project's own codebase/docs,
+    not from external research sources.
+
+    External collector sources (pdf, web, github, reddit, drive) are always
+    classified as external regardless of title. Only "local" source files are
+    checked against the internal title patterns.
+    """
+    if cfg is None:
+        cfg = {}
+
+    always_ext = set(
+        cfg.get("sources", {}).get("always_external_sources")
+        or _ALWAYS_EXTERNAL_SOURCES
+    )
+    if source.lower() in always_ext:
+        return False
+
+    # For "local" and unknown sources, check title patterns
+    patterns = _build_internal_patterns(cfg)
+    title_lower = title.lower()
+    return any(p in title_lower for p in patterns)
 
 
 # ── Personal document detection ───────────────────────────────────────────────
@@ -205,15 +263,41 @@ def chunk_text(
     """
     Split text into overlapping chunks of approximately `chunk_size` chars.
     Respects paragraph boundaries where possible.
+
+    Paragraphs larger than `chunk_size` are further split at word boundaries
+    so that uniformly-formatted text (no double-newlines) is still chunked
+    correctly instead of being returned as a single oversized chunk.
     """
-    paragraphs = re.split(r"\n\n+", text.strip())
+    raw_paragraphs = re.split(r"\n\n+", text.strip())
+
+    # Pre-expand any paragraph that is wider than chunk_size.
+    paragraphs: List[str] = []
+    for para in raw_paragraphs:
+        if len(para) <= chunk_size:
+            paragraphs.append(para)
+            continue
+        # Word-boundary split for oversized paragraph
+        start = 0
+        while start < len(para):
+            end = min(start + chunk_size, len(para))
+            if end < len(para):
+                # Prefer breaking at last space before the limit
+                space = para.rfind(" ", start, end)
+                if space > start:
+                    end = space
+            paragraphs.append(para[start:end].strip())
+            start = end
+
     chunks: List[str] = []
     current = ""
     for para in paragraphs:
         if len(current) + len(para) + 2 > chunk_size and current:
             chunks.append(current.strip())
-            # Overlap: keep last `overlap` chars
-            current = current[-overlap:] + "\n\n" + para
+            # Overlap: keep last `overlap` chars.
+            # Note: `s[-0:]` in Python returns the full string, not an empty
+            # string, so we guard explicitly against overlap == 0.
+            tail = current[-overlap:] if overlap > 0 else ""
+            current = tail + ("\n\n" if tail else "") + para
         else:
             current = current + ("\n\n" if current else "") + para
     if current.strip():
@@ -231,11 +315,23 @@ def analyze_corpus(
     Read all_docs.txt, compute stats, filter low-quality / personal / non-research
     docs, re-chunk, and write cleaned corpus + corpus_report.json.
 
+    Also writes data/external_docs.txt (external sources only) so that
+    code_suggester can prioritize external research over internal project files.
+
     Filters applied (in order):
       1. Personal/financial documents  (invoices, receipts, contracts, CVs)
       2. Non-research language         (Hebrew, Arabic, etc. > 20% of text)
       3. Quality threshold             (type-token ratio, length, boilerplate)
+
+    Source tagging:
+      Each passing document is classified as "external" (PDFs, web, GitHub,
+      Reddit) or "internal" (project's own files). Internal docs are included
+      in all_docs_cleaned.txt but kept separate in external_docs.txt so the
+      LLM can be fed primarily external research.
     """
+    cfg = _load_config()
+    min_ext_frac = cfg.get("corpus", {}).get("min_external_fraction", 0.30)
+
     path = Path(all_docs_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -244,8 +340,9 @@ def analyze_corpus(
     raw_docs = raw_text.split("<DOC_SEP>")
 
     stats_list: List[DocStats] = []
-    good_chunks: List[str] = []
-    filtered_docs: List[dict] = []       # for the report
+    external_chunks: List[str] = []
+    internal_chunks: List[str] = []
+    filtered_docs: List[dict] = []
 
     for raw_doc in raw_docs:
         raw_doc = raw_doc.strip()
@@ -261,6 +358,7 @@ def analyze_corpus(
         words = body.split()
         sentences = len(re.findall(r"[.!?]+", body))
         score, reason = score_document(body, title)
+        internal = is_internal_doc(title, source, cfg)
 
         ds = DocStats(
             title=title,
@@ -270,18 +368,23 @@ def analyze_corpus(
             sentences=sentences,
             quality_score=round(score, 3),
             filter_reason=reason,
+            source_type="internal" if internal else "external",
         )
         stats_list.append(ds)
 
         if score >= quality_threshold and not reason:
             chunks = chunk_text(body)
-            good_chunks.extend(chunks)
+            if internal:
+                internal_chunks.extend(chunks)
+            else:
+                external_chunks.extend(chunks)
         else:
-            # Reason is set for hard-filtered docs; threshold failure has no reason
             effective_reason = reason or f"quality score {score:.2f} < {quality_threshold}"
             filtered_docs.append({"title": title, "reason": effective_reason})
             if verbose:
                 print(f"  [filtered] {title[:60]} — {effective_reason}")
+
+    good_chunks = external_chunks + internal_chunks
 
     # Warn if nothing survived
     if not good_chunks:
@@ -292,10 +395,28 @@ def analyze_corpus(
             "   All personal/non-research documents were removed.\n"
         )
 
-    # Write cleaned corpus
+    # Warn if corpus is mostly internal (corpus contamination)
+    total_chunks = len(good_chunks)
+    ext_frac = len(external_chunks) / total_chunks if total_chunks else 0.0
+    if total_chunks > 0 and ext_frac < min_ext_frac:
+        print(
+            f"\n⚠️  CORPUS QUALITY WARNING: Only {ext_frac:.0%} of chunks are from external "
+            f"sources (minimum recommended: {min_ext_frac:.0%}).\n"
+            f"   The corpus is mostly internal project files — code suggestions will\n"
+            f"   reflect your existing codebase rather than external research.\n"
+            f"   Add external PDFs via --pdf-dir papers/ or URLs via --urls to fix this.\n"
+        )
+
+    # Write all cleaned chunks (external first — better for beginning/middle sampling)
     cleaned_path = output_dir / "all_docs_cleaned.txt"
-    with cleaned_path.open("w", encoding="utf-8") as f:
-        f.write("\n\n".join(good_chunks))
+    cleaned_path.write_text("\n\n".join(good_chunks), encoding="utf-8")
+
+    # Write external-only corpus for code_suggester external-first sampling
+    external_path = output_dir / "external_docs.txt"
+    if external_chunks:
+        external_path.write_text("\n\n".join(external_chunks), encoding="utf-8")
+    elif external_path.exists():
+        external_path.unlink()
 
     passing = [s for s in stats_list if s.quality_score >= quality_threshold and not s.filter_reason]
 
@@ -312,15 +433,23 @@ def analyze_corpus(
         ),
         "total_chars_raw": sum(s.chars for s in stats_list),
         "total_chars_cleaned": cleaned_path.stat().st_size,
-        "total_chunks": len(good_chunks),
+        "total_chunks": total_chunks,
+        "external_chunks": len(external_chunks),
+        "internal_chunks": len(internal_chunks),
+        "external_fraction": round(ext_frac, 3),
         "avg_quality_score": round(
             statistics.mean(s.quality_score for s in stats_list), 3
         ) if stats_list else 0,
         "source_breakdown": _source_breakdown(stats_list),
+        "source_type_breakdown": {
+            "external": sum(1 for s in stats_list if s.source_type == "external" and not s.filter_reason),
+            "internal": sum(1 for s in stats_list if s.source_type == "internal" and not s.filter_reason),
+        },
         "doc_stats": [
             {
                 "title": s.title,
                 "source": s.source,
+                "source_type": s.source_type,
                 "words": s.words,
                 "quality": s.quality_score,
                 **({"filtered_reason": s.filter_reason} if s.filter_reason else {}),
@@ -330,7 +459,7 @@ def analyze_corpus(
         "filtered_docs": filtered_docs,
     }
     report_path = output_dir / "corpus_report.json"
-    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
     if verbose:
         personal_n = report["docs_filtered_personal"]
@@ -340,8 +469,12 @@ def analyze_corpus(
         print(f"   {report['docs_passing_filter']} passed  |  "
               f"{personal_n} personal/language filtered  |  "
               f"{quality_n} low-quality filtered")
-        print(f"   {report['total_chunks']} chunks → {cleaned_path}")
+        print(f"   {total_chunks} chunks → {cleaned_path}")
+        print(f"   External: {len(external_chunks)} chunks ({ext_frac:.0%})  |  "
+              f"Internal: {len(internal_chunks)} chunks")
         print(f"   Avg quality score: {report['avg_quality_score']}")
+        if external_chunks:
+            print(f"   External corpus → {external_path}")
         if personal_n:
             print(f"\n   ℹ️  {personal_n} personal documents were removed (invoices, contracts, CVs, etc.).")
             print(f"      Use a dedicated papers/ folder instead of Downloads to avoid this.")

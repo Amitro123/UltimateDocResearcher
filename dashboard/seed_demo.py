@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import random
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -118,7 +118,7 @@ def seed(db_path: str | Path | None = None) -> None:
     mem = RunMemory(db_path) if db_path else RunMemory()
 
     rng = random.Random(42)
-    base_ts = datetime.utcnow()
+    base_ts = datetime.now(timezone.utc)
 
     for run in DEMO_RUNS:
         ts = base_ts - timedelta(days=run["days_ago"])

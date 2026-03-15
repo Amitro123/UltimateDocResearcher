@@ -30,7 +30,7 @@ import json
 import math
 import re
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -230,7 +230,7 @@ class RunMemory:
         params: list = [status]
 
         if max_age_days is not None:
-            cutoff = (datetime.utcnow() - timedelta(days=max_age_days)).isoformat()
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
             query += " AND timestamp >= ?"
             params.append(cutoff)
 
@@ -300,4 +300,4 @@ class RunMemory:
 
 
 def _now() -> str:
-    return datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
