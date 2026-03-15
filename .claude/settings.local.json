@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/Dana/cowork/ultimate-doc-researcher -type f ! -path ./.git/* ! -path ./.venv/* ! -path ./.pytest_cache/* ! -path ./.qodo/* ! -path ./.claude/*)",
+      "Bash(find /c/Users/Dana/cowork/ultimate-doc-researcher -type f \\\\\\(-name *.py -o -name *.md -o -name *.txt -o -name *.yml -o -name *.yaml -o -name Dockerfile -o -name .gitignore \\\\\\) ! -path ./.git/* ! -path ./.venv/* ! -path ./.pytest_cache/* ! -path ./.qodo/* ! -path ./.claude/*)",
+      "Bash(find . -type f \\\\\\(-name *.py -o -name *.md -o -name *.txt -o -name *.yml -o -name Dockerfile -o -name .gitignore \\\\\\) ! -path ./.git/* ! -path ./.venv/* ! -path ./.pytest_cache/* ! -path ./.qodo/* ! -path ./.claude/*)",
+      "Bash(python -m pytest tests/test_eval_spec.py tests/test_scraper.py tests/test_eval.py tests/test_code_suggester.py -v)",
+      "Bash(python -m pytest tests/test_eval_spec.py tests/test_scraper.py tests/test_eval.py -v --tb=short)"
+    ]
+  }
+}

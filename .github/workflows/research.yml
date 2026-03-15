@@ -109,7 +109,7 @@ jobs:
           python poll_results.py \
             --slug "${{ needs.push-kernel.outputs.kernel-slug }}" \
             --poll-interval 30 \
-            --timeout 5 \
+            --timeout 60 \
             --results-dir ../results/ \
             --git-sync || echo "Download attempted"
 

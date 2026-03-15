@@ -224,6 +224,63 @@ class TestHeuristicScore(unittest.TestCase):
         self.assertLessEqual(score, 5)
 
 
+# ── Heuristic scoring bias fix ────────────────────────────────────────────────
+
+class TestHeuristicScoringBiasFix(unittest.TestCase):
+    """
+    Regression tests for the scoring-bias fix (walkthrough finding):
+    - clarity must be capped at 3 (not 4) even for keyword-rich documents
+    - "example" (removed from clarity signals) must not inflate clarity score
+    - freshness must be capped at 3 regardless of hit count
+    """
+
+    def _score(self, name: str, doc: str) -> int:
+        from eval.run_eval import _heuristic_score
+        return _heuristic_score(doc, {"name": name})
+
+    def test_clarity_ceiling_is_3(self):
+        # A document rich in formerly-positive clarity signals (e.g., "example")
+        # should not exceed 3 with the new ceiling.
+        rich_doc = (
+            "For instance, consider this approach. "
+            "Specifically, the pattern works like this: e.g. you call the function. "
+            "For instance, another example can be found here."
+        )
+        score = self._score("clarity", rich_doc)
+        self.assertLessEqual(score, 3, "clarity score must not exceed 3 (ceiling fix)")
+
+    def test_clarity_example_keyword_no_longer_counts(self):
+        # "example" was removed from clarity signals to prevent inflation.
+        # A doc with only "example" should score the same as a doc with no signals.
+        doc_with_only_example = "This is an example of a pattern. Another example follows."
+        doc_no_signals = "This document discusses general concepts in a broad manner."
+        score_example = self._score("clarity", doc_with_only_example)
+        score_none = self._score("clarity", doc_no_signals)
+        # Both should get the baseline score of 2 (no real clarity signals)
+        self.assertEqual(score_example, score_none,
+                         '"example" keyword must not raise clarity score above baseline')
+
+    def test_freshness_ceiling_is_3(self):
+        # A document with many freshness signals should still not exceed 3.
+        rich_doc = "Updated for 2025 and 2026. Latest modern standards. Updated patterns."
+        score = self._score("freshness", rich_doc)
+        self.assertLessEqual(score, 3, "freshness score must not exceed 3 (ceiling fix)")
+
+    def test_actionability_still_reaches_4(self):
+        # Actionability ceiling remains 4 — not reduced.
+        code_doc = "```python\nimport anthropic\ndef call(): pass\npip install anthropic\ncopy this\n```"
+        score = self._score("actionability", code_doc)
+        self.assertGreaterEqual(score, 3)
+        self.assertLessEqual(score, 4)
+
+    def test_anti_patterns_still_reaches_4(self):
+        # anti_patterns ceiling remains 4 — not reduced.
+        doc = "Don't use this pattern. Avoid calling without auth. Never ignore errors. Gotcha: missing close."
+        score = self._score("anti_patterns", doc)
+        self.assertLessEqual(score, 4)
+        self.assertGreaterEqual(score, 3)
+
+
 # ── evaluate() integration ────────────────────────────────────────────────────
 
 class TestEvaluate(unittest.TestCase):

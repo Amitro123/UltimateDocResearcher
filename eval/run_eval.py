@@ -187,7 +187,8 @@ def _judge_criterion(
         )
         return _parse_score(raw)
     except Exception as exc:
-        print(f"[eval] Judge failed for '{name}': {exc}", file=sys.stderr)
+        short = str(exc).splitlines()[0][:80]
+        print(f"[eval] '{name}': LLM unavailable ({short}) — heuristic fallback", file=sys.stderr)
         return _heuristic_score(document, criterion), "heuristic fallback (no LLM)"
 
 
@@ -205,21 +206,39 @@ def _heuristic_score(document: str, criterion: dict) -> int:
     """
     Fallback when no LLM is available.
     Uses keyword signals relevant to each criterion.
+
+    Per-criterion ceilings prevent generic signals from inflating scores:
+    - clarity/freshness cap at 3 because their keywords are too common or unreliable
+      as proxies for quality (e.g. "example" appears in every doc; year strings in
+      auto-generated text don't guarantee up-to-date content).
     """
     name = criterion.get("name", "")
     doc_lower = document.lower()
 
     signals = {
-        "clarity": ["example", "e.g.", "for instance", "specifically", "means"],
+        # Narrowed: removed "example" and "means" — ubiquitous in any code doc,
+        # making clarity score 4 even for low-quality outputs.
+        "clarity": ["e.g.", "for instance", "specifically"],
         "completeness": ["also", "additionally", "furthermore", "covers", "includes"],
         "actionability": ["```python", "import ", "def ", "pip install", "copy"],
-        "freshness": ["2025", "2026", "latest", "new", "updated", "modern"],
+        "freshness": ["2025", "2026", "latest", "updated", "modern"],
         "anti_patterns": ["don't", "avoid", "gotcha", "common mistake", "never", "instead"],
     }
 
+    # Per-criterion max: clarity and freshness are capped at 3 to reduce
+    # optimism bias observed when no LLM is available (walkthrough finding).
+    ceilings = {
+        "clarity": 3,
+        "completeness": 4,
+        "actionability": 4,
+        "freshness": 3,
+        "anti_patterns": 4,
+    }
+
     hits = sum(1 for kw in signals.get(name, []) if kw in doc_lower)
-    # Map hit count → score: 0→2, 1→3, 2→3, 3→4, 4+→4
-    return min(4, max(2, hits + 2))
+    ceiling = ceilings.get(name, 4)
+    # Map hit count → score: 0→2, 1→3, 2+→4, capped by ceiling
+    return min(ceiling, max(2, hits + 2))
 
 
 # ── Weighted scoring ──────────────────────────────────────────────────────────

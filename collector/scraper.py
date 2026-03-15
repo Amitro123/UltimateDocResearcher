@@ -159,7 +159,17 @@ def scrape_topic(
 
         return "\n\n<DOC_SEP>\n\n".join(parts)
 
-    return asyncio.run(_run())
+    # Handle existing event loops (Jupyter, FastAPI, etc.) where asyncio.run()
+    # would raise RuntimeError: "This event loop is already running."
+    try:
+        asyncio.get_running_loop()
+        # Already inside an async context — run in a fresh thread with its own loop.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, _run()).result()
+    except RuntimeError:
+        # No running loop — safe to use asyncio.run().
+        return asyncio.run(_run())
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────

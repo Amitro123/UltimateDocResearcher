@@ -88,7 +88,7 @@ def _call_llm(
     "ollama:llama3.2"  → local Ollama (free, no key needed)
     """
     from autoresearch.llm_client import chat, best_available_model
-    
+
     # Auto-detect model if none provided
     effective_model = model or best_available_model()
 
@@ -99,7 +99,6 @@ def _call_llm(
         n_suggestions=n_suggestions,
     )
     try:
-        from autoresearch.llm_client import chat
         return chat(
             messages=[{"role": "user", "content": user_content}],
             model=effective_model,

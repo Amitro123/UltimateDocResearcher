@@ -1,0 +1,39 @@
+# Version control
+.git
+.gitignore
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Development data (large and/or sensitive — mount at runtime via -v)
+data/
+results/
+papers/
+
+# SQLite databases (created at runtime)
+dashboard/runs.db
+dashboard/cache/
+
+# Secrets and local config
+.env
+*.env
+*.env.*
+.claude/
+
+# Test artifacts
+tests/
+*.ipynb
+test_*.py
+
+# CI / IDE artifacts
+.github/
+.vscode/
+.idea/
+
+# Docs (not needed in the image)
+*.md
+AGENTS.md
+CODE_REVIEW.md
+E2E_GUIDE.md

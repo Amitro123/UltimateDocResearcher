@@ -13,6 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user before setting workdir
+RUN groupadd --system appgroup && useradd --system --gid appgroup --no-create-home appuser
+
 # Set working directory
 WORKDIR /app
 
@@ -23,8 +26,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY . .
 
-# Create data and results directories
-RUN mkdir -p data results
+# Create data and results directories and hand ownership to the app user
+RUN mkdir -p data results && chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
+
+# Expose Streamlit dashboard port
+EXPOSE 8501
 
 # Explicitly set the path for the data directory
 ENV DATA_DIR=/app/data

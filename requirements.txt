@@ -21,8 +21,13 @@ google-auth-oauthlib>=1.2
 # ── API / Trigger ─────────────────────────────────────────────────────────────
 kaggle>=1.6
 openai>=1.30           # optional, for LLM Q&A generation in prepare.py
+anthropic>=0.25        # optional, for Claude as judge / code suggester
+
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+streamlit>=1.32        # dashboard/app.py
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 tqdm>=4.66
 python-dotenv>=1.0
 pandas>=2.1            # for results analysis
+pyyaml>=6.0            # eval/run_eval.py YAML parsing

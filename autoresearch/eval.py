@@ -129,7 +129,8 @@ def _call_judge(
         )
         return JudgeScores.from_parse(raw)
     except Exception as exc:
-        print(f"[eval] Judge call failed: {exc}", file=sys.stderr)
+        short = str(exc).splitlines()[0][:80]
+        print(f"[eval] Judge unavailable ({short}) — heuristic fallback activated", file=sys.stderr)
         return _heuristic_score(reference, model_answer)
 
 
