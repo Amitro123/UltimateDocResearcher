@@ -71,7 +71,7 @@ def _render_template(template_name: str, context: dict) -> str:
 # ── LLM call helper ───────────────────────────────────────────────────────────
 
 def _llm_chat(system: str, user: str, model: Optional[str] = None,
-              max_tokens: int = 2048) -> str:
+              max_tokens: int = 2048, use_cache: bool = True) -> str:
     """Call the LLM. Returns plain string response."""
     try:
         from autoresearch.llm_client import chat, best_available_model
@@ -81,6 +81,7 @@ def _llm_chat(system: str, user: str, model: Optional[str] = None,
             model=effective_model,
             system=system,
             max_tokens=max_tokens,
+            use_cache=use_cache,
         )
     except Exception as exc:
         return f"[LLM unavailable: {exc}]\n\n_Run with a configured LLM to generate this section._"
@@ -94,11 +95,19 @@ _SECTION_RE = re.compile(
 )
 
 def _extract_sections(text: str) -> dict[str, str]:
-    """Parse ## heading / body pairs from LLM output into a dict."""
+    """Parse ## heading / body pairs from LLM output into a dict.
+
+    Also stores positional keys '_section_0', '_section_1', … so callers
+    can fall back to positional extraction when heading names don't match.
+    """
     sections: dict[str, str] = {}
+    idx = 0
     for m in _SECTION_RE.finditer(text):
         key = m.group("heading").strip().lower().replace(" ", "_")
-        sections[key] = m.group("body").strip()
+        body = m.group("body").strip()
+        sections[key] = body
+        sections[f"_section_{idx}"] = body  # positional alias
+        idx += 1
     return sections
 
 
@@ -298,6 +307,98 @@ quantified where possible: latency target, accuracy threshold, error rate, etc.)
 No vague advice. Every step must have a clear start/end state.
 """
 
+_ROOT_CAUSE_SYSTEM = """\
+You are a senior SRE performing a post-incident root cause analysis.
+Given an error log or incident report, produce a complete Markdown document
+with EXACTLY these four sections (use these exact ## headings):
+
+## Incident Overview
+2-3 sentences: what service failed, when, and the headline impact.
+
+## Root Causes Identified
+Numbered list. Each item: error code/message → trigger → why it was not caught.
+
+## Error Timeline
+Bullet list of timestamped events in chronological order.
+Format each bullet: `HH:MM UTC — [SEVERITY] description`
+
+## Impact Assessment
+Markdown table with columns: Metric | Baseline | During Incident | After Fix
+Use real numbers from the log.
+
+Be concrete. Quote exact error codes and numbers. Do not add extra sections.
+"""
+
+_FIX_STEPS_SYSTEM = """\
+You are a senior engineer writing a remediation runbook.
+Given an error log or incident report, produce a complete Markdown document
+with EXACTLY these four sections (use these exact ## headings):
+
+## Immediate Actions
+Bullet list of actions to stop the bleeding right now.
+Include who should do each action and the expected time-to-impact.
+
+## Step-by-Step Remediation
+Numbered steps in the order they were executed.
+Each step: **bold title**, 1-sentence rationale, exact command or config change.
+
+## Commands Reference
+Fenced code block(s) with all shell/gcloud/API commands.
+Add a one-line comment above each command explaining what it does.
+
+## Verification
+Bullet list: how to confirm each root cause is resolved.
+Include the exact metric or log query and its expected value after the fix.
+
+Use real commands from the log. Prefer copy-paste code blocks. Do not add extra sections.
+"""
+
+_PREVENTION_SYSTEM = """\
+You are a senior SRE writing a post-incident prevention document.
+Given an incident report, produce a complete Markdown document
+with EXACTLY these five sections (use these exact ## headings):
+
+## Prevention Summary
+1-2 sentences: what class of problem this was and the dominant prevention theme.
+
+## Monitoring & Alerting
+Numbered list of alerts to create.
+Each entry: metric name/query → threshold → who gets paged → severity.
+
+## Validation Gates
+Numbered list of automated checks to add to the pipeline/CI/import job.
+Each gate: what assertion to add and what it catches.
+
+## Policy Changes
+Bullet list: what to change → new value or policy.
+Cover config, IAM, schema, and process changes.
+
+## Runbook
+Numbered steps for on-call: what to check first, diagnostic commands, escalation path.
+
+Use specific metric names, IAM roles, and field names from the corpus.
+Do not add extra sections.
+"""
+
+_KEY_TAKEAWAYS_SYSTEM = """\
+You are a technical analyst distilling an academic paper for practitioners.
+
+Structure your response with these exact ## headings:
+## Core Contributions
+(Numbered list: the 3-5 main claims or techniques introduced in the paper.
+Each entry: one sentence stating the contribution and its significance.)
+
+## Practical Takeaways
+(Bullet list: what a practitioner should actually *do* differently based on this paper.
+Focus on techniques, thresholds, configs, or design choices they can adopt today.)
+
+## Limitations & Future Work
+(Bullet list: what the authors acknowledge as limitations, plus open questions
+that the paper does not answer.)
+
+Be specific. Reference model names, dataset names, and numbers from the paper.
+"""
+
 _SYSTEM_PROMPTS = {
     "SUMMARY.md":        _SUMMARY_SYSTEM,
     "ARCHITECTURE.md":   _ARCHITECTURE_SYSTEM,
@@ -306,6 +407,11 @@ _SYSTEM_PROMPTS = {
     "RISKS.md":          _RISKS_SYSTEM,
     "BENCHMARKS.md":     _BENCHMARKS_SYSTEM,
     "NEXT_STEPS.md":     _NEXT_STEPS_SYSTEM,
+    # Input-type specific
+    "ROOT_CAUSE.md":     _ROOT_CAUSE_SYSTEM,
+    "FIX_STEPS.md":      _FIX_STEPS_SYSTEM,
+    "PREVENTION.md":     _PREVENTION_SYSTEM,
+    "KEY_TAKEAWAYS.md":  _KEY_TAKEAWAYS_SYSTEM,
 }
 
 
@@ -555,6 +661,200 @@ def generate_plan(
     })
 
 
+def _render_raw_doc(
+    deliverable_name: str,
+    topic: str,
+    corpus_extract: str,
+    source_note: str,
+    deliverable_set,
+    run_id: str,
+    corpus_stats: dict,
+    system_prompt: str,
+    model: Optional[str],
+    template_slots: dict[str, str],
+    expected_sections: list[str],
+) -> str:
+    """
+    Generic full-document generator for input-type deliverables.
+
+    Asks the LLM to produce a complete Markdown document with specific ##
+    headings, then extracts sections by heading name (with positional fallback).
+    The extracted sections are rendered into a Jinja2 template.
+
+    Args:
+        deliverable_name:  e.g. 'ROOT_CAUSE.md'
+        template_slots:    dict mapping template variable → list of heading
+                           key aliases to try in order.
+        expected_sections: list of the ## headings the system prompt asks for,
+                           in order (used to build the reminder in the user msg).
+    """
+    heading_list = "\n".join(f"## {h}" for h in expected_sections)
+    reminder = (
+        f"Produce a complete Markdown document using EXACTLY these "
+        f"{len(expected_sections)} ## headings in this order:\n{heading_list}\n"
+        "Do NOT add extra headings or change the heading text."
+    )
+    user = _user_prompt(topic, corpus_extract, source_note,
+                        deliverable_set.focus_hint, reminder)
+    # Bypass prompt cache: different system prompts on the same corpus must not
+    # collide with cached SUMMARY responses.
+    raw = _llm_chat(system_prompt, user, model=model, max_tokens=2048,
+                    use_cache=False)
+    sections = _extract_sections(raw)
+
+    from research_deliverables.classify_topic import template_for
+    context: dict = {
+        "topic":     topic,
+        "timestamp": corpus_stats.get("timestamp", ""),
+        "run_id":    run_id,
+    }
+    for slot_name, aliases in template_slots.items():
+        context[slot_name] = _extract_or_default(sections, *aliases)
+
+    return _render_template(template_for(deliverable_name), context)
+
+
+def generate_root_cause(
+    topic: str,
+    corpus_extract: str,
+    source_note: str,
+    deliverable_set,
+    run_id: str,
+    corpus_stats: dict,
+    model: Optional[str] = None,
+) -> str:
+    print("[deliverables] Generating ROOT_CAUSE.md ...")
+    return _render_raw_doc(
+        deliverable_name="ROOT_CAUSE.md",
+        topic=topic,
+        corpus_extract=corpus_extract,
+        source_note=source_note,
+        deliverable_set=deliverable_set,
+        run_id=run_id,
+        corpus_stats=corpus_stats,
+        system_prompt=_ROOT_CAUSE_SYSTEM,
+        model=model,
+        expected_sections=[
+            "Incident Overview",
+            "Root Causes Identified",
+            "Error Timeline",
+            "Impact Assessment",
+        ],
+        template_slots={
+            "incident_overview": ["incident_overview", "overview", "summary",
+                                  "_section_0"],
+            "root_causes":       ["root_causes_identified", "root_causes",
+                                  "key_findings", "_section_1"],
+            "error_timeline":    ["error_timeline", "timeline", "_section_2"],
+            "impact":            ["impact_assessment", "impact",
+                                  "recommended_next_action", "_section_3"],
+        },
+    )
+
+
+def generate_fix_steps(
+    topic: str,
+    corpus_extract: str,
+    source_note: str,
+    deliverable_set,
+    run_id: str,
+    corpus_stats: dict,
+    model: Optional[str] = None,
+) -> str:
+    print("[deliverables] Generating FIX_STEPS.md ...")
+    return _render_raw_doc(
+        deliverable_name="FIX_STEPS.md",
+        topic=topic,
+        corpus_extract=corpus_extract,
+        source_note=source_note,
+        deliverable_set=deliverable_set,
+        run_id=run_id,
+        corpus_stats=corpus_stats,
+        system_prompt=_FIX_STEPS_SYSTEM,
+        model=model,
+        expected_sections=[
+            "Immediate Actions",
+            "Step-by-Step Remediation",
+            "Commands Reference",
+            "Verification",
+        ],
+        template_slots={
+            "immediate_actions": ["immediate_actions", "overview", "_section_0"],
+            "remediation_steps": ["step-by-step_remediation",
+                                   "step_by_step_remediation",
+                                   "key_findings", "_section_1"],
+            "commands":          ["commands_reference", "commands", "_section_2"],
+            "verification":      ["verification", "recommended_next_action",
+                                   "_section_3"],
+        },
+    )
+
+
+def generate_prevention(
+    topic: str,
+    corpus_extract: str,
+    source_note: str,
+    deliverable_set,
+    run_id: str,
+    corpus_stats: dict,
+    model: Optional[str] = None,
+) -> str:
+    print("[deliverables] Generating PREVENTION.md ...")
+    return _render_raw_doc(
+        deliverable_name="PREVENTION.md",
+        topic=topic,
+        corpus_extract=corpus_extract,
+        source_note=source_note,
+        deliverable_set=deliverable_set,
+        run_id=run_id,
+        corpus_stats=corpus_stats,
+        system_prompt=_PREVENTION_SYSTEM,
+        model=model,
+        expected_sections=[
+            "Prevention Summary",
+            "Monitoring & Alerting",
+            "Validation Gates",
+            "Policy Changes",
+            "Runbook",
+        ],
+        template_slots={
+            "prevention_summary": ["prevention_summary", "overview", "_section_0"],
+            "monitoring":         ["monitoring_&_alerting", "monitoring_and_alerting",
+                                    "monitoring", "key_findings", "_section_1"],
+            "validation":         ["validation_gates", "validation", "_section_2"],
+            "policy_changes":     ["policy_changes", "policies", "_section_3"],
+            "runbook":            ["runbook", "recommended_next_action", "_section_4"],
+        },
+    )
+
+
+def generate_key_takeaways(
+    topic: str,
+    corpus_extract: str,
+    source_note: str,
+    deliverable_set,
+    run_id: str,
+    corpus_stats: dict,
+    model: Optional[str] = None,
+) -> str:
+    print("[deliverables] Generating KEY_TAKEAWAYS.md ...")
+    user = _user_prompt(topic, corpus_extract, source_note, deliverable_set.focus_hint)
+    raw = _llm_chat(_KEY_TAKEAWAYS_SYSTEM, user, model=model, max_tokens=2048)
+    sections = _extract_sections(raw)
+
+    from research_deliverables.classify_topic import template_for
+    return _render_template(template_for("KEY_TAKEAWAYS.md"), {
+        "topic":               topic,
+        "timestamp":           corpus_stats.get("timestamp", ""),
+        "run_id":              run_id,
+        "core_contributions":  _extract_or_default(sections, "core_contributions"),
+        "practical_takeaways": _extract_or_default(sections, "practical_takeaways"),
+        "limitations":         _extract_or_default(sections, "limitations_&_future_work",
+                                                    "limitations_and_future_work",
+                                                    "limitations"),
+    })
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _GENERATORS = {
@@ -565,6 +865,11 @@ _GENERATORS = {
     "RISKS.md":          generate_risks,
     "BENCHMARKS.md":     generate_benchmarks,
     "NEXT_STEPS.md":     generate_next_steps,
+    # Input-type specific
+    "ROOT_CAUSE.md":     generate_root_cause,
+    "FIX_STEPS.md":      generate_fix_steps,
+    "PREVENTION.md":     generate_prevention,
+    "KEY_TAKEAWAYS.md":  generate_key_takeaways,
 }
 
 
@@ -578,6 +883,7 @@ def generate_deliverables(
     run_id: Optional[str] = None,
     max_corpus_chars: int = 40_000,
     include_code: bool = True,
+    input_type: Optional[str] = None,
 ) -> DeliverablePackage:
     """
     Generate a full research deliverable package.
@@ -590,11 +896,14 @@ def generate_deliverables(
         run_id:           Unique run identifier (auto-generated if None)
         max_corpus_chars: Corpus window size
         include_code:     Whether to also run code_suggester
+        input_type:       Override input type detection ('error_log', 'paper',
+                          'codebase', 'website', 'text', or None for auto)
 
     Returns:
         DeliverablePackage with paths to all generated files
     """
     from research_deliverables.classify_topic import classify_topic
+    from research_deliverables.classify_input import classify_input, input_deliverable_set
     from autoresearch.code_suggester import _sample_corpus_weighted
 
     corpus_path = Path(corpus_path)
@@ -614,8 +923,15 @@ def generate_deliverables(
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "CODE").mkdir(exist_ok=True)
 
-    # Classify
-    deliverable_set = classify_topic(topic)
+    # Classify — input type takes priority over topic type
+    corpus_sample = corpus_path.read_text(encoding="utf-8", errors="ignore")[:15_000]
+    detected_input_type = classify_input(corpus_sample, hint=input_type)
+    if detected_input_type != "text":
+        deliverable_set = input_deliverable_set(detected_input_type, topic)
+        print(f"[deliverables] Input type: {detected_input_type} (auto-detected)")
+    else:
+        deliverable_set = classify_topic(topic)
+        print(f"[deliverables] Input type: text -> topic classification used")
     print(f"[deliverables] Topic type: {deliverable_set.research_type}")
     print(f"[deliverables] Deliverables: {', '.join(deliverable_set.deliverables)}")
 
@@ -680,6 +996,7 @@ def generate_deliverables(
     meta = {
         "run_id":          run_id,
         "topic":           topic,
+        "input_type":      detected_input_type,
         "research_type":   deliverable_set.research_type,
         "timestamp":       timestamp,
         "corpus_path":     str(corpus_path),

@@ -151,6 +151,20 @@ def main() -> int:
         help="Research iterations (used with --collect, default: 1)"
     )
 
+    # Input type
+    parser.add_argument(
+        "--input-type", default=None,
+        choices=["error_log", "codebase", "paper", "website", "text"],
+        help=(
+            "Override input type detection. "
+            "'error_log' → ROOT_CAUSE + FIX_STEPS + PREVENTION; "
+            "'paper' → SUMMARY + KEY_TAKEAWAYS + BENCHMARKS; "
+            "'codebase' → ARCHITECTURE + TESTS + CODE; "
+            "'website' → FLOW + INTEGRATION; "
+            "'text' → auto topic-based classification (default)"
+        ),
+    )
+
     # Output options
     parser.add_argument(
         "--no-code", action="store_true",
@@ -220,6 +234,7 @@ def main() -> int:
             run_id=args.run_id,
             max_corpus_chars=args.corpus_chars,
             include_code=not args.no_code,
+            input_type=getattr(args, "input_type", None),
         )
     except Exception as exc:
         import traceback

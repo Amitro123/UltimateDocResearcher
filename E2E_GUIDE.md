@@ -45,10 +45,19 @@ Your question / project
         ▼
   5alt. RESEARCH PACKAGE  ← multi-format deliverables for any topic type
         │     python -m autoresearch.research --topic "..."
+        │     python -m autoresearch.research --topic "..." --input-type error_log
+        │
+        │     Phase 12: auto-detects corpus input type
+        │       error_log → ROOT_CAUSE.md + FIX_STEPS.md + PREVENTION.md
+        │       paper     → SUMMARY.md + KEY_TAKEAWAYS.md + BENCHMARKS.md
+        │       codebase  → ARCHITECTURE.md + PLAN.md + RISKS.md
+        │       text/other → topic-keyword classification (code/arch/process/market)
         ▼
   results/<run-id>/
-    SUMMARY.md  ARCHITECTURE.md  IMPLEMENTATION.md
-    RISKS.md    BENCHMARKS.md    NEXT_STEPS.md
+    SUMMARY.md  ARCHITECTURE.md  PLAN.md
+    RISKS.md    BENCHMARKS.md
+    ROOT_CAUSE.md  FIX_STEPS.md  PREVENTION.md   (error_log only)
+    KEY_TAKEAWAYS.md                               (paper only)
     CODE/code_suggestions.md     metadata.json
         │
         ▼
@@ -419,7 +428,7 @@ The full report is saved to `results/eval-report.json`.
 
 Instead of (or in addition to) Step 5, you can generate a complete set of
 structured deliverables in one command. This is best when you want more than
-just code snippets — for example, an implementation plan, a risk register,
+just code snippets — for example, an incident analysis, a risk register,
 or a benchmark comparison.
 
 ```bash
@@ -427,21 +436,52 @@ python -m autoresearch.research \
   --topic "Improving project-rules-generator skill for Claude"
 ```
 
-The system **automatically classifies your topic** and generates only the
-relevant files:
+**Phase 12: Input-type detection** — The system auto-detects what kind of
+corpus you have and routes to the appropriate deliverable set automatically.
+You can also override with `--input-type`:
+
+| Input type | Detected when corpus has... | Files generated |
+|------------|---------------------------|----------------|
+| `error_log` | ISO timestamps, `[ERROR]` tags, stack traces, quota/error codes | `ROOT_CAUSE.md` + `FIX_STEPS.md` + `PREVENTION.md` |
+| `paper` | "Abstract", "Introduction", "References", DOI patterns | `SUMMARY.md` + `KEY_TAKEAWAYS.md` + `BENCHMARKS.md` |
+| `codebase` | `def `, `class `, `import `, source code patterns | `ARCHITECTURE.md` + `PLAN.md` + `RISKS.md` |
+| `website` | HTML tags, nav/footer, `href=` patterns | `SUMMARY.md` + `ARCHITECTURE.md` + `PLAN.md` |
+| `text` (default) | Nothing above matched — falls back to topic keywords | Topic-based (see below) |
+
+When input type is `text`, topic keyword classification applies:
 
 | Topic type | Example | Files generated |
 |------------|---------|----------------|
-| `code` | "Claude SDK tool use patterns" | SUMMARY + IMPLEMENTATION + NEXT_STEPS + CODE |
-| `arch` | "Streaming data pipeline architecture" | SUMMARY + ARCHITECTURE + RISKS + NEXT_STEPS + CODE |
-| `process` | "Fine-tuning LLMs with RLHF" | SUMMARY + IMPLEMENTATION + RISKS + NEXT_STEPS + CODE |
-| `market` | "Survey of LLM eval frameworks" | SUMMARY + BENCHMARKS + RISKS + NEXT_STEPS + CODE |
+| `code` | "Claude SDK tool use patterns" | SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS |
+| `arch` | "Streaming data pipeline architecture" | SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS |
+| `process` | "Fine-tuning LLMs with RLHF" | SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS |
+| `market` | "Survey of LLM eval frameworks" | SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS |
 
 Output goes to `results/<topic-slug>-<timestamp>/`. Open the **Research
 Packages** tab in the dashboard to browse and download any deliverable.
 
 ```bash
-# Check what type your topic would classify as before running:
+# Auto-detect input type from corpus (default)
+python -m autoresearch.research \
+  --topic "Vertex AI Agent Builder indexing error"
+
+# Override input type explicitly:
+python -m autoresearch.research \
+  --topic "Cloud incident 2026-03-14" \
+  --input-type error_log
+#   --input-type paper       ← research papers
+#   --input-type codebase    ← source code corpus
+#   --input-type website     ← scraped web content
+#   --input-type text        ← force topic-keyword classification
+
+# Check what input type your corpus would be detected as:
+python -c "
+corpus = open('data/all_docs_cleaned.txt').read()
+from research_deliverables.classify_input import classify_input
+print(classify_input(corpus))
+"
+
+# Check what topic type would be used (when input_type == 'text'):
 python -c "
 from research_deliverables.classify_topic import classify_topic
 ds = classify_topic('your topic here')
@@ -461,7 +501,7 @@ python -m autoresearch.research --topic "RAG architecture" --no-code
 
 You can also eval each deliverable individually:
 ```bash
-python -m eval.run_eval --input results/<run-id>/IMPLEMENTATION.md --threshold 3.5
+python -m eval.run_eval --input results/<run-id>/ROOT_CAUSE.md --threshold 3.5
 python -m eval.run_eval --input results/<run-id>/RISKS.md --threshold 3.5
 ```
 
@@ -569,6 +609,9 @@ python -m autoresearch.eval \
 | **Multi-format package** | `python -m autoresearch.research --topic "your topic"` |
 | Multi-format (full pipeline) | `python -m autoresearch.research --topic "X" --collect --pdf-dir papers/` |
 | Multi-format (no code) | `python -m autoresearch.research --topic "X" --no-code` |
+| **Error-log package** | `python -m autoresearch.research --topic "X" --input-type error_log` |
+| **Paper package** | `python -m autoresearch.research --topic "X" --input-type paper` |
+| Check detected input type | `python -c "from research_deliverables.classify_input import classify_input; print(classify_input(open('data/all_docs_cleaned.txt').read()))"` |
 | Check topic type | `python -c "from research_deliverables.classify_topic import classify_topic; print(classify_topic('topic').research_type)"` |
 | **Score output quality** | `python -m eval.run_eval --input results/code_suggestions.md --judge ollama:llama3.2` |
 | Score any deliverable | `python -m eval.run_eval --input results/<run-id>/RISKS.md --judge ollama:llama3.2` |
@@ -739,12 +782,15 @@ For prepare.py specifically:
 | `results/eval-report.json` → `criterion_scores` | Per-criterion breakdown | What specifically to improve |
 | `results/<run-id>/SUMMARY.md` | Executive overview + key findings | Start here when sharing results |
 | `results/<run-id>/ARCHITECTURE.md` | Component diagram, data flow, trade-offs | Architecture / system design topics |
-| `results/<run-id>/IMPLEMENTATION.md` | Step-by-step plan, code patterns, pitfalls | Implementation / process topics |
+| `results/<run-id>/PLAN.md` | Step-by-step plan, code patterns, pitfalls | Implementation / process topics |
 | `results/<run-id>/RISKS.md` | Risk register table + mitigations | Before starting any major build |
 | `results/<run-id>/BENCHMARKS.md` | Comparison tables + performance numbers | Survey / market topics |
-| `results/<run-id>/NEXT_STEPS.md` | Prioritised actions (this week / 1 month) | After reading the summary |
+| `results/<run-id>/ROOT_CAUSE.md` | Incident overview, root causes, error timeline | **error_log** input type |
+| `results/<run-id>/FIX_STEPS.md` | Immediate actions, remediation steps, commands | **error_log** input type |
+| `results/<run-id>/PREVENTION.md` | Monitoring alerts, validation gates, runbook | **error_log** input type |
+| `results/<run-id>/KEY_TAKEAWAYS.md` | Core contributions, practical takeaways, limitations | **paper** input type |
 | `results/<run-id>/CODE/code_suggestions.md` | Copy-paste snippets inside a package | Your main code deliverable |
-| `results/<run-id>/metadata.json` | Run ID, topic type, corpus stats, errors | Debug or re-run a package |
+| `results/<run-id>/metadata.json` | Run ID, input type, topic type, corpus stats, errors | Debug or re-run a package |
 | `results/results.tsv` | Training metrics per iteration | Track model improvement |
 | `dashboard/runs.db` | SQLite history of all runs + metrics | Query with any SQLite tool |
 | `memory/prompts.db` | SQLite prompt cache (O(1) lookups, fuzzy match) | Inspect or clear cache |
@@ -795,11 +841,27 @@ with exponential back-off (15 s → 30 s → 60 s → 120 s) — you'll see
 wait 2–3 minutes before re-running. To permanently avoid this, enable
 Pay-as-you-go billing on the project in Google Cloud Console.
 
-**Research package generates wrong deliverable type**
-→ `classify_topic()` uses keyword matching. Check what it returns:
+**Research package generates wrong deliverable type (input-type detection)**
+→ Phase 12 first checks the *corpus content* to detect `error_log`, `paper`,
+`codebase`, or `website`. Check what was detected:
+```bash
+python -c "
+corpus = open('data/all_docs_cleaned.txt').read()
+from research_deliverables.classify_input import classify_input
+print(classify_input(corpus))
+"
+```
+If it returns `text` when you expected `error_log`, your corpus may not have
+enough signal patterns (needs ≥2 matches: ISO timestamps, `[ERROR]` tags,
+quota/error codes, stack traces). Use `--input-type error_log` to override.
+
+**Research package generates wrong deliverable type (topic classification)**
+→ `classify_topic()` uses keyword matching (applies when input type is `text`).
+Check what it returns:
 `python -c "from research_deliverables.classify_topic import classify_topic; print(classify_topic('your topic').research_type)"`
 If the classification is wrong, override with a more specific topic string
-(e.g. "Architecture of …" for arch, "Survey of …" for market).
+(e.g. "Architecture of …" for arch, "Survey of …" for market), or pass
+`--input-type text` and rely on topic keywords explicitly.
 
 **Research package deliverable is shallow / LLM-only content**
 → The generators are only as good as the corpus. If ARCHITECTURE.md reads

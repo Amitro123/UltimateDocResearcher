@@ -313,7 +313,7 @@ streamlit run dashboard/app.py
 
 Opens at `http://localhost:8501` with four views:
 
-### Multi-Format Research Output (new)
+### Multi-Format Research Output (Phase 12)
 
 Generate a structured package of research deliverables in one command:
 
@@ -331,17 +331,44 @@ Output: `results/multi-tenant-rag-with-claude-tool-use-<timestamp>/`
 | `RISKS.md` | Risk register with likelihood/impact/mitigation table |
 | `BENCHMARKS.md` | Comparison tables and performance numbers |
 | `NEXT_STEPS.md` | Prioritised actions (this week / 1-4 weeks / 1-3 months) |
+| `ROOT_CAUSE.md` | Incident overview, root causes, error timeline (error logs) |
+| `FIX_STEPS.md` | Immediate actions, remediation steps, commands (error logs) |
+| `PREVENTION.md` | Monitoring, validation gates, runbook (error logs) |
+| `KEY_TAKEAWAYS.md` | Core contributions, practical takeaways (papers) |
 | `CODE/code_suggestions.md` | Copy-paste Python patterns (from code_suggester) |
-| `metadata.json` | Run metadata, errors, corpus stats |
+| `metadata.json` | Run metadata, input type, corpus stats |
 
-The system automatically classifies your topic into one of four research types and generates only the relevant deliverables:
+**Phase 12: Dynamic Templates by Input Type**
 
-- **`code`** — implementation-heavy topics → SUMMARY + IMPLEMENTATION + NEXT_STEPS + CODE
-- **`arch`** — system design → SUMMARY + ARCHITECTURE + RISKS + NEXT_STEPS + CODE
-- **`process`** — workflow/MLOps → SUMMARY + IMPLEMENTATION + RISKS + NEXT_STEPS + CODE
-- **`market`** — surveys/comparisons → SUMMARY + BENCHMARKS + RISKS + NEXT_STEPS + CODE
+The system auto-detects your corpus input type and routes to specialized deliverables — no manual configuration needed:
+
+| Input type | Corpus signals | Files generated |
+|------------|---------------|----------------|
+| `error_log` | ISO timestamps, `[ERROR]`, `QUOTA_EXCEEDED`, stack traces | `ROOT_CAUSE.md` + `FIX_STEPS.md` + `PREVENTION.md` |
+| `paper` | "Abstract", "Introduction", "References", DOI patterns | `SUMMARY.md` + `KEY_TAKEAWAYS.md` + `BENCHMARKS.md` |
+| `codebase` | `def `, `class `, `import `, function/class patterns | `ARCHITECTURE.md` + `PLAN.md` + `RISKS.md` |
+| `website` | HTML tags, nav/footer patterns, `href=` | `SUMMARY.md` + `ARCHITECTURE.md` + `PLAN.md` |
+| `text` (default) | Falls back to topic-based classification below | Topic-type deliverables |
+
+Topic-based classification (when input type is `text` / not detected):
+
+- **`code`** — implementation-heavy topics → SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS
+- **`arch`** — system design → SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS
+- **`process`** — workflow/MLOps → SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS
+- **`market`** — surveys/comparisons → SUMMARY + ARCHITECTURE + PLAN + RISKS + BENCHMARKS
 
 ```bash
+# Auto-detect input type (default)
+python -m autoresearch.research --topic "Vertex AI indexing error"
+
+# Override input type detection explicitly
+python -m autoresearch.research \
+  --topic "Cloud indexing incident 2026-03-14" \
+  --input-type error_log
+
+# All input types:
+#   error_log | paper | codebase | website | text (text = use topic classification)
+
 # Full pipeline: collect → analyze → generate
 python -m autoresearch.research \
   --topic "LLM evaluation frameworks" \
@@ -351,6 +378,13 @@ python -m autoresearch.research \
 
 # Skip code suggestions (faster)
 python -m autoresearch.research --topic "RAG architecture" --no-code
+
+# Check what input type your corpus would get before running:
+python -c "
+corpus = open('data/all_docs_cleaned.txt').read()
+from research_deliverables.classify_input import classify_input
+print(classify_input(corpus))
+"
 
 # View packages in the dashboard
 streamlit run dashboard/app.py  # → Research Packages tab
@@ -442,8 +476,18 @@ ultimate-doc-researcher/
 │   └── test_cases/             # Sample outputs for manual/CI testing
 ├── research_deliverables/
 │   ├── generators.py           # LLM-powered deliverable generation
-│   ├── templates/              # Jinja2 templates for MD files
-│   └── classify_topic.py       # Topic-to-deliverable classification
+│   ├── classify_topic.py       # Topic-to-deliverable classification (keyword-based)
+│   ├── classify_input.py       # Corpus input-type detection (error_log/paper/codebase/website)
+│   └── templates/              # Jinja2 templates for MD deliverables
+│       ├── summary.jinja2      # SUMMARY.md
+│       ├── architecture.jinja2 # ARCHITECTURE.md
+│       ├── plan.jinja2         # PLAN.md
+│       ├── risks.jinja2        # RISKS.md
+│       ├── benchmarks.jinja2   # BENCHMARKS.md
+│       ├── root_cause.jinja2   # ROOT_CAUSE.md  (error_log input type)
+│       ├── fix_steps.jinja2    # FIX_STEPS.md   (error_log input type)
+│       ├── prevention.jinja2   # PREVENTION.md  (error_log input type)
+│       └── key_takeaways.jinja2 # KEY_TAKEAWAYS.md (paper input type)
 ├── memory/
 │   ├── memory.py               # SQLite run history + topic similarity search
 │   └── cache.py                # Prompt cache (exact + fuzzy matching)
@@ -658,6 +702,9 @@ Always run `new_run.py` before starting a new topic. It archives `papers/`, clea
 - [x] Phase 6: Streamlit dashboard (`dashboard/app.py`)
 - [x] Phase 6: SQLite run history + topic similarity (`memory/memory.py`)
 - [x] Phase 6: Prompt cache with fuzzy matching (`memory/cache.py`)
+- [x] Phase 12: Dynamic templates by input type (`classify_input.py`)
+- [x] Phase 12: Error-log corpus → ROOT_CAUSE + FIX_STEPS + PREVENTION
+- [x] Phase 12: Paper corpus → KEY_TAKEAWAYS; `--input-type` CLI override
 - [ ] Phase 7: End-to-end CI tests
 - [ ] Phase 6: Iterative corpus expansion (gap-driven re-collection)
 - [ ] Phase 6: Multi-model ensemble with mergekit

@@ -22,7 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-ResearchType = Literal["code", "arch", "process", "market"]
+ResearchType = Literal["code", "arch", "process", "market",
+                       "error_log", "paper", "codebase", "website"]
 
 # Deliverable filenames (relative to the run output dir)
 ALL_DELIVERABLES = [
@@ -37,6 +38,7 @@ ALL_DELIVERABLES = [
 
 # Template names (in research_deliverables/templates/)
 _TEMPLATE_MAP: dict[str, str] = {
+    # Existing
     "SUMMARY.md":        "summary.jinja2",
     "ARCHITECTURE.md":   "architecture.jinja2",
     "IMPLEMENTATION.md": "implementation.jinja2",
@@ -44,6 +46,12 @@ _TEMPLATE_MAP: dict[str, str] = {
     "RISKS.md":          "risks.jinja2",
     "BENCHMARKS.md":     "benchmarks.jinja2",
     "NEXT_STEPS.md":     "next_steps.jinja2",
+    # error_log input type
+    "ROOT_CAUSE.md":     "root_cause.jinja2",
+    "FIX_STEPS.md":      "fix_steps.jinja2",
+    "PREVENTION.md":     "prevention.jinja2",
+    # paper input type
+    "KEY_TAKEAWAYS.md":  "key_takeaways.jinja2",
 }
 
 
