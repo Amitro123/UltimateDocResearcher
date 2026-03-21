@@ -1,7 +1,7 @@
 # Research Program: UltimateDocResearcher-Reliability
 
 ## Topic
-LLM evaluation best practices
+Project Rules Generator / .clinerules patterns
 
 ## Objective
 Analyze the current codebase, historical bugs (Issue #18), and research results to identify gaps in reliability, performance, and API handling. Propose concrete code improvements for the research pipeline.

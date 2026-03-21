@@ -80,7 +80,31 @@ cd ultimate-doc-researcher
 pip install -r requirements.txt
 ```
 
-### 2. Collect documents
+### 2. One-command pipeline (Phase 13)
+
+The fastest way to get a full research package:
+
+```bash
+# Full pipeline: collect (incremental) + analyze + prepare + package
+python -m autoresearch.cli \
+  --topic "Claude tool use patterns" \
+  --full \
+  --incremental \
+  --pdf-dir papers/
+
+# Minimal: generate deliverables from an existing corpus
+python -m autoresearch.cli --topic "RAG architecture"
+
+# Force re-collect everything (ignore incremental cache)
+python -m autoresearch.cli --topic "..." --full --incremental --force-recollect
+```
+
+Output: `results/<topic-slug>-<timestamp>/` with SUMMARY, ARCHITECTURE,
+IMPLEMENTATION, RISKS, NEXT_STEPS, and CODE deliverables.
+
+---
+
+### 3. Collect documents (manual)
 
 ```bash
 # Scrape web + reddit + GitHub on a topic
@@ -99,6 +123,46 @@ python -m collector.ultimate_collector \
 
 ### 3. Prepare training data
 
+Three backends in priority order — pick the one that fits your setup:
+
+| Backend | Quality | Cost | Requirement |
+|---------|---------|------|-------------|
+| `notebooklm` | **Best** | Free | Google account + one-time browser login |
+| `llm` | Good | Free (Ollama) / paid (cloud) | Ollama or API key |
+| `heuristic` | Basic | Free | Nothing |
+
+**NotebookLM (recommended when you have PDFs):**
+```bash
+pip install "notebooklm-py[browser]"
+playwright install chromium
+notebooklm login          # one-time browser auth
+
+python autoresearch/prepare.py \
+  --corpus data/all_docs_cleaned.txt \
+  --source-type notebooklm \
+  --pdf-sources papers/your-paper.pdf \
+  --max-pairs 100
+```
+
+> **Why NotebookLM?**
+> NotebookLM reads your PDFs as whole documents — it understands context
+> across pages, figures, and sections. The quiz it generates contains
+> questions a human expert would ask, with explicitly marked correct answers.
+> Compare that to the heuristic backend (regex on text fragments) or a local
+> LLM limited to 4K–8K token chunks that never sees the full document.
+> Better questions = better training signal = better code suggestions at the end.
+> And it's free — no API key, no GPU, just your Google account.
+
+**Local Ollama (no auth needed):**
+```bash
+python autoresearch/prepare.py \
+  --corpus data/all_docs_cleaned.txt \
+  --source-type llm \
+  --model ollama:llama3.2 \
+  --max-pairs 500
+```
+
+**Heuristic fallback (always works, lowest quality):**
 ```bash
 python autoresearch/prepare.py \
   --corpus data/all_docs_cleaned.txt \
@@ -376,6 +440,10 @@ ultimate-doc-researcher/
 │   ├── eval_spec.yaml          # 5-criteria evaluation spec with weights
 │   ├── run_eval.py             # Standardized eval runner CLI
 │   └── test_cases/             # Sample outputs for manual/CI testing
+├── research_deliverables/
+│   ├── generators.py           # LLM-powered deliverable generation
+│   ├── templates/              # Jinja2 templates for MD files
+│   └── classify_topic.py       # Topic-to-deliverable classification
 ├── memory/
 │   ├── memory.py               # SQLite run history + topic similarity search
 │   └── cache.py                # Prompt cache (exact + fuzzy matching)

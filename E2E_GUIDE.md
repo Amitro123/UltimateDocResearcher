@@ -11,8 +11,20 @@
 Your question / project
         │
         ▼
+┌─────────────────────────────────────────┐
+│  Phase 13 one-command entry (NEW)       │
+│  python -m autoresearch.cli             │
+│    --topic "X" --full --incremental     │
+│                                         │
+│  Runs steps 1–5 automatically.          │
+│  Use --incremental to skip unchanged    │
+│  sources on re-runs (fast).             │
+└────────────────┬────────────────────────┘
+                 │  (or run steps manually below)
+        ▼
   1. COLLECT       ← PDFs, URLs, GitHub repos, your own codebase
-        │
+        │             ↳ --incremental: skip unchanged sources
+        │               (tracks hashes in data/collect_metadata.jsonl)
         ▼
   2. ANALYZE       ← quality filter, dedup, chunking
         │             writes external_docs.txt (70% of LLM window)
@@ -41,7 +53,7 @@ Your question / project
         │
         ▼
   7. DASHBOARD     ← run history, metrics, Research Packages tab
-                     (dashboard/app.py)
+                     (dashboard/app.py — New Run tab has incremental toggle)
 ```
 
 Steps 4–6 run without a GPU. Step 3 is free with Ollama.
@@ -95,6 +107,44 @@ python -m autoresearch.llm_client auto       # what's the best model available?
 This is a real simulation of using UltimateDocResearcher to research
 how to improve a Claude skills creator / project rules generator.
 
+### Step 0b — Phase 13: one-command pipeline (skip to here for speed)
+
+If you want everything in a single command instead of running steps 1–5
+manually, use the Phase 13 CLI:
+
+```bash
+# Full pipeline: collect (incremental) + analyze + prepare + package
+python -m autoresearch.cli \
+  --topic "Improving project-rules-generator skill for Claude" \
+  --full \
+  --incremental \
+  --pdf-dir papers/
+```
+
+`--incremental` reads `data/collect_metadata.jsonl` and skips any local
+files or URLs whose hash hasn't changed since the last run — dramatically
+faster on repeated research iterations.
+
+```bash
+# Force re-collect everything (ignore the incremental cache):
+python -m autoresearch.cli --topic "..." --full --incremental --force-recollect
+
+# Deliverables only (corpus already collected):
+python -m autoresearch.cli --topic "..."
+
+# Individual steps:
+python -m autoresearch.cli --topic "..." --collect --incremental   # collect only
+python -m autoresearch.cli --topic "..." --analyze                 # analyze only
+python -m autoresearch.cli --topic "..." --package                 # package only
+```
+
+Output lands in `results/<topic-slug>-<timestamp>/` (same as
+`python -m autoresearch.research`).
+
+> If you prefer the manual step-by-step flow, continue with Step 0 below.
+
+---
+
 ### Step 0 — Reset the workspace (required before every new topic)
 
 > **Skip this and your new research will be contaminated by the previous run.**
@@ -128,6 +178,30 @@ python new_run.py --topic "..." --keep-cache
 ### Step 1 — Collect your sources
 
 Collect from PDFs, web pages, and GitHub repos related to your topic.
+
+**Incremental collect (recommended for re-runs):**
+
+Use `python -m autoresearch.incremental_collect` when you're adding a few
+new PDFs to an existing corpus — it skips sources whose content hash
+matches the last run and only processes genuinely new or changed files:
+
+```bash
+python -m autoresearch.incremental_collect \
+  --topic "Improving project-rules-generator skill for Claude" \
+  --pdf-dir papers/ \
+  --data-dir data/
+
+# After adding a new PDF to papers/, only that file is processed.
+# Re-running on the same unchanged directory: "Nothing new to collect."
+
+# Force re-collect all sources (ignore the cache):
+python -m autoresearch.incremental_collect --pdf-dir papers/ --force
+```
+
+Hash state is stored in `data/collect_metadata.jsonl` — delete it to
+reset the incremental cache without affecting the corpus.
+
+**Full collect (first run or when corpus needs rebuilding):**
 
 ```bash
 # Option A: point at local PDFs you already have
@@ -166,6 +240,8 @@ python -m collector.ultimate_collector --pdf-dir papers/ --output-dir data/
 > `papers/`.
 
 After collection, `data/all_docs.txt` contains everything separated by `<DOC_SEP>`.
+The incremental collector appends to (rather than overwrites) this file, so
+repeated partial runs accumulate content safely.
 
 ---
 
@@ -199,8 +275,28 @@ python autoresearch/prepare.py \
   --pdf-sources papers/The-Complete-Guide-to-Building-Skill-for-Claude.pdf \
   --max-pairs 100
 ```
-NotebookLM reads your PDFs deeply and generates quiz-quality questions —
-far better than anything a small model can produce.
+
+> **What you gain from NotebookLM vs the other backends:**
+>
+> | | Heuristic | Local LLM | NotebookLM |
+> |---|---|---|---|
+> | How it reads your PDF | Regex on text fragments | Chunk-by-chunk (4K–8K tokens) | Whole document, all pages at once |
+> | Question quality | Pattern-matched phrases | OK but misses cross-page context | Expert-level, spans full document |
+> | Answers | Extracted text | LLM-generated | Explicitly marked correct options + hints |
+> | Cost | Free | Free (Ollama) / paid (API) | **Free** (Google account) |
+> | Setup | None | Ollama installed | One-time browser login |
+>
+> **Concrete impact on your results:** The Q&A pairs in `val.jsonl` are your
+> research questions — they drive what the model learns and what code patterns
+> get surfaced. NotebookLM questions are more specific, more meaningful, and
+> cover the full depth of the source material. This produces noticeably higher
+> `judge_avg_score` in `eval_report.json` and more actionable snippets in
+> `code_suggestions.md`.
+>
+> **When to use it:** Any time you have PDFs (research papers, technical guides,
+> documentation). NotebookLM is purpose-built for reading PDFs, so it
+> outperforms any generic LLM on this task regardless of model size.
+> If you only have scraped web content (no PDFs), fall back to `--source-type llm`.
 
 **Good quality — local Ollama (free, no auth needed):**
 ```bash
@@ -453,6 +549,12 @@ python -m autoresearch.eval \
 
 | Goal | Command |
 |------|---------|
+| **Phase 13 — full pipeline (one command)** | `python -m autoresearch.cli --topic "X" --full --incremental` |
+| Phase 13 — deliverables only | `python -m autoresearch.cli --topic "X"` |
+| Phase 13 — collect step only | `python -m autoresearch.cli --topic "X" --collect --incremental` |
+| Phase 13 — force re-collect | `python -m autoresearch.cli --topic "X" --full --incremental --force-recollect` |
+| **Incremental collect (standalone)** | `python -m autoresearch.incremental_collect --pdf-dir papers/ --data-dir data/` |
+| Incremental collect (force) | `python -m autoresearch.incremental_collect --pdf-dir papers/ --force` |
 | **Reset before new topic** | `python new_run.py --topic "your topic"` |
 | Reset (keep cache) | `python new_run.py --topic "your topic" --keep-cache` |
 | Reset dry-run | `python new_run.py --topic "your topic" --dry-run` |
@@ -516,7 +618,10 @@ improving across runs.
 **New Run** — enter a topic and click "Check for similar runs" before
 starting. If a past run covered similar ground (cosine similarity ≥ 0.85),
 the dashboard warns you and offers to reuse the existing output instead of
-burning API credits.
+burning API credits. The **Incremental collect** checkbox (default: on)
+makes the generated command use `autoresearch.cli --incremental`, so only
+new or changed sources are fetched. Uncheck it for a full re-collect, or
+check **Force re-collect** to ignore the incremental cache entirely.
 
 **Research Packages** — browse all multi-format packages generated by
 `python -m autoresearch.research`. Select a package from the dropdown to
@@ -620,6 +725,7 @@ For prepare.py specifically:
 
 | File | What it contains | When to look at it |
 |------|-----------------|-------------------|
+| `data/collect_metadata.jsonl` | Incremental collect hash cache (Phase 13) | Delete to reset incremental state |
 | `data/all_docs.txt` | Raw collected documents | Debug collection issues |
 | `data/all_docs_cleaned.txt` | Quality-filtered chunks | Input to prepare.py |
 | `data/external_docs.txt` | External-only chunks (tagged by analyzer) | Used for 70% of LLM window |
@@ -709,3 +815,14 @@ but the output won't be properly formatted Markdown.
 **"Research Packages" dashboard tab shows no packages**
 → No `metadata.json` files found under `results/`. Generate a package first:
 `python -m autoresearch.research --topic "your topic"`
+
+**Incremental collect says "Nothing new to collect" but corpus is stale**
+→ The hash cache in `data/collect_metadata.jsonl` thinks all sources are
+unchanged. Delete that file to reset it (the corpus `all_docs.txt` is
+untouched), then re-run — or use `--force` / `--force-recollect` to
+ignore the cache for that run only.
+
+**`python -m autoresearch.cli` exits immediately without generating files**
+→ Without `--full` or individual step flags it defaults to `--package`
+(deliverables only). If no corpus exists yet, add `--collect` or `--full`.
+Run with `--help` to see all options.

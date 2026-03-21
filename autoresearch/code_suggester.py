@@ -42,13 +42,16 @@ from typing import Optional
 
 def _load_cfg() -> dict:
     """Load config.yaml from project root. Returns {} on any failure."""
+    import logging
     try:
         import yaml
         cfg_path = Path(__file__).resolve().parent.parent / "config.yaml"
         if cfg_path.exists():
             return yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "[code_suggester] Failed to load config.yaml: %s — using defaults", exc
+        )
     return {}
 
 _CFG = _load_cfg()

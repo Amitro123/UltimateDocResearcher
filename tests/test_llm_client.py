@@ -169,13 +169,21 @@ class TestBestAvailableModel(unittest.TestCase):
 
     def test_falls_back_to_openai_when_no_anthropic(self):
         with patch("autoresearch.llm_client.check_ollama", return_value=False), \
-             patch.dict("os.environ", {"ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "sk-test"}):
+             patch.dict("os.environ", {
+                 "ANTHROPIC_API_KEY": "",
+                 "OPENAI_API_KEY": "sk-test",
+                 "GOOGLE_API_KEY": ""
+             }):
             model = best_available_model()
         self.assertIn("gpt", model)
 
     def test_returns_ollama_spec_as_last_resort(self):
         with patch("autoresearch.llm_client.check_ollama", return_value=False), \
-             patch.dict("os.environ", {"ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": ""}):
+             patch.dict("os.environ", {
+                 "ANTHROPIC_API_KEY": "",
+                 "OPENAI_API_KEY": "",
+                 "GOOGLE_API_KEY": ""
+             }):
             model = best_available_model(prefer_ollama_model="phi4")
         self.assertEqual(model, "ollama:phi4")
 

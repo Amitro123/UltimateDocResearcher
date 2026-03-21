@@ -81,19 +81,25 @@ def _with_retries(fn, *, retries: int = 3, base_delay: float = 1.0, jitter: floa
 # ── Optional prompt cache ─────────────────────────────────────────────────────
 # PromptCache is imported lazily so llm_client works even without the memory
 # module.  Pass use_cache=False to bypass it entirely.
-_cache_instance = None
+_CACHE_NOT_INITIALIZED = object()   # sentinel: "never attempted"
+_CACHE_UNAVAILABLE = object()       # sentinel: "tried and failed"
+_cache_instance = _CACHE_NOT_INITIALIZED
+
+import logging as _logging
+_logger = _logging.getLogger(__name__)
 
 
 def _get_cache():
     """Return the shared PromptCache instance, or None if unavailable."""
     global _cache_instance
-    if _cache_instance is None:
+    if _cache_instance is _CACHE_NOT_INITIALIZED:
         try:
             from memory.cache import PromptCache  # noqa: PLC0415
             _cache_instance = PromptCache()
-        except Exception:
-            _cache_instance = False  # mark unavailable so we don't retry
-    return _cache_instance if _cache_instance is not False else None
+        except Exception as exc:
+            _logger.debug("[llm_client] Cache unavailable: %s", exc)
+            _cache_instance = _CACHE_UNAVAILABLE
+    return _cache_instance if _cache_instance is not _CACHE_UNAVAILABLE else None
 
 
 # ── Default Ollama endpoint ────────────────────────────────────────────────────
@@ -402,7 +408,7 @@ def _chat_google(
     base_delay: float = 15.0,   # free-tier needs longer gaps than typical APIs
 ) -> str:
     """
-    Google Gemini implementation via native SDK.
+    Google Gemini implementation via the google-genai SDK.
 
     Automatically retries on 429 / ResourceExhausted errors with exponential
     back-off.  Free-tier keys hit per-minute quotas quickly, so the default
@@ -419,40 +425,44 @@ def _chat_google(
             filtered.append(m)
 
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types as genai_types
     except ImportError:
         raise RuntimeError(
-            "google-generativeai SDK not installed. Run: pip install google-generativeai"
+            "google-genai SDK not installed. Run: pip install google-genai"
         )
 
     api_key = os.getenv("GOOGLE_API_KEY", "")
     if not api_key:
         raise RuntimeError("GOOGLE_API_KEY not set")
-    genai.configure(api_key=api_key)
 
-    model_instance = genai.GenerativeModel(
-        model_name=model,
-        system_instruction=system if system else None,
-    )
+    client = genai.Client(api_key=api_key)
 
-    # Gemini expects [{"role": "user"|"model", "parts": [...]}]
-    history = []
+    # Build contents list from conversation history
+    contents = []
     for m in filtered[:-1]:
         role = "user" if m["role"] == "user" else "model"
-        history.append({"role": role, "parts": [m["content"]]})
-
+        contents.append(
+            genai_types.Content(role=role, parts=[genai_types.Part(text=m["content"])])
+        )
     last_msg = filtered[-1]["content"] if filtered else ""
+    contents.append(
+        genai_types.Content(role="user", parts=[genai_types.Part(text=last_msg)])
+    )
+
+    cfg = genai_types.GenerateContentConfig(
+        system_instruction=system if system else None,
+        max_output_tokens=max_tokens,
+        temperature=temperature,
+    )
 
     last_exc: Exception | None = None
     for attempt in range(retries):
         try:
-            chat_session = model_instance.start_chat(history=history)
-            resp = chat_session.send_message(
-                last_msg,
-                generation_config=genai.types.GenerationConfig(
-                    max_output_tokens=max_tokens,
-                    temperature=temperature,
-                ),
+            resp = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=cfg,
             )
             return resp.text.strip()
         except Exception as exc:
@@ -460,8 +470,8 @@ def _chat_google(
                 last_exc = exc
                 delay = base_delay * (2 ** attempt) + random.uniform(0, 5)
                 print(
-                    f"  ⚠️  Gemini rate limit (attempt {attempt + 1}/{retries}): {exc}\n"
-                    f"     Retrying in {delay:.0f}s …",
+                    f"  WARNING: Gemini rate limit (attempt {attempt + 1}/{retries}): {exc}\n"
+                    f"     Retrying in {delay:.0f}s ...",
                     file=sys.stderr,
                 )
                 time.sleep(delay)
@@ -509,6 +519,11 @@ def best_available_model(prefer_ollama_model: str = "llama3.2") -> str:
 # ── CLI (quick test / model check) ───────────────────────────────────────────
 
 if __name__ == "__main__":
+    # Windows CP1252 terminals can't encode emoji — ensure UTF-8 output
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     import argparse
 
     parser = argparse.ArgumentParser(description="Test LLM client or check available models")

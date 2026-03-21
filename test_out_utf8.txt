@@ -1,0 +1,53 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-8.4.2, pluggy-1.6.0 -- C:\Users\Dana\anaconda3\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Dana\cowork\ultimate-doc-researcher
+configfile: pyproject.toml
+plugins: anyio-4.11.0, opik-1.10.32, asyncio-1.2.0, cov-4.1.0, dotenv-0.5.2, typeguard-4.5.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 28 items
+
+tests/test_llm_client.py::TestParseModel::test_anthropic_model PASSED    [  3%]
+tests/test_llm_client.py::TestParseModel::test_anthropic_opus PASSED     [  7%]
+tests/test_llm_client.py::TestParseModel::test_ollama_model_with_tag PASSED [ 10%]
+tests/test_llm_client.py::TestParseModel::test_ollama_simple PASSED      [ 14%]
+tests/test_llm_client.py::TestParseModel::test_ollama_trailing_slash_stripped PASSED [ 17%]
+tests/test_llm_client.py::TestParseModel::test_ollama_with_remote_host PASSED [ 21%]
+tests/test_llm_client.py::TestParseModel::test_openai_model PASSED       [ 25%]
+tests/test_llm_client.py::TestParseModel::test_openai_other PASSED       [ 28%]
+tests/test_llm_client.py::TestIsOllama::test_false_for_anthropic PASSED  [ 32%]
+tests/test_llm_client.py::TestIsOllama::test_false_for_openai PASSED     [ 35%]
+tests/test_llm_client.py::TestIsOllama::test_true_for_ollama_prefix PASSED [ 39%]
+tests/test_llm_client.py::TestCheckOllama::test_returns_false_on_invalid_host PASSED [ 42%]
+tests/test_llm_client.py::TestCheckOllama::test_returns_false_when_unreachable PASSED [ 46%]
+tests/test_llm_client.py::TestCheckOllama::test_returns_true_when_server_responds PASSED [ 50%]
+tests/test_llm_client.py::TestListOllamaModels::test_parses_model_names_from_response PASSED [ 53%]
+tests/test_llm_client.py::TestListOllamaModels::test_returns_empty_list_when_unreachable PASSED [ 57%]
+tests/test_llm_client.py::TestListOllamaModels::test_returns_empty_on_missing_models_key PASSED [ 60%]
+tests/test_llm_client.py::TestBestAvailableModel::test_falls_back_to_anthropic_when_ollama_down PASSED [ 64%]
+tests/test_llm_client.py::TestBestAvailableModel::test_falls_back_to_openai_when_no_anthropic FAILED [ 67%]
+tests/test_llm_client.py::TestBestAvailableModel::test_prefers_ollama_when_running_with_model_pulled PASSED [ 71%]
+tests/test_llm_client.py::TestBestAvailableModel::test_returns_ollama_spec_as_last_resort FAILED [ 75%]
+tests/test_llm_client.py::TestBestAvailableModel::test_uses_first_available_model_when_preferred_not_pulled PASSED [ 78%]
+tests/test_llm_client.py::TestUrllibOpenaiPath::test_raises_on_http_error PASSED [ 82%]
+tests/test_llm_client.py::TestUrllibOpenaiPath::test_sends_correct_payload_to_ollama PASSED [ 85%]
+tests/test_llm_client.py::TestChatFunction::test_api_base_override_respected PASSED [ 89%]
+tests/test_llm_client.py::TestChatFunction::test_ollama_chat_returns_reply PASSED [ 92%]
+tests/test_llm_client.py::TestChatFunction::test_openai_model_uses_openai_key PASSED [ 96%]
+tests/test_llm_client.py::TestChatFunction::test_system_prompt_prepended PASSED [100%]
+
+================================== FAILURES ===================================
+_____ TestBestAvailableModel.test_falls_back_to_openai_when_no_anthropic ______
+tests\test_llm_client.py:174: in test_falls_back_to_openai_when_no_anthropic
+    self.assertIn("gpt", model)
+E   AssertionError: 'gpt' not found in 'gemini-2.5-flash-lite'
+_______ TestBestAvailableModel.test_returns_ollama_spec_as_last_resort ________
+tests\test_llm_client.py:180: in test_returns_ollama_spec_as_last_resort
+    self.assertEqual(model, "ollama:phi4")
+E   AssertionError: 'gemini-2.5-flash-lite' != 'ollama:phi4'
+E   - gemini-2.5-flash-lite
+E   + ollama:phi4
+=========================== short test summary info ===========================
+FAILED tests/test_llm_client.py::TestBestAvailableModel::test_falls_back_to_openai_when_no_anthropic
+FAILED tests/test_llm_client.py::TestBestAvailableModel::test_returns_ollama_spec_as_last_resort
+======================== 2 failed, 26 passed in 5.09s =========================

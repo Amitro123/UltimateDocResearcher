@@ -36,93 +36,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-# ── YAML loading (stdlib fallback if PyYAML not available) ────────────────────
+# ── YAML loading ──────────────────────────────────────────────────────────────
 
 def _load_yaml(path: Path) -> dict:
-    """
-    Load eval_spec.yaml. Uses PyYAML if available, otherwise a minimal
-    hand-rolled parser sufficient for our known schema.
-    """
-    try:
-        import yaml
-        with path.open(encoding="utf-8") as f:
-            return yaml.safe_load(f)
-    except ImportError:
-        return _minimal_yaml_load(path)
-
-
-def _minimal_yaml_load(path: Path) -> dict:
-    """
-    Minimal YAML parser for eval_spec.yaml when PyYAML is not installed.
-    Handles: top-level keys, list items with name/question/weight, nested scalars.
-    """
-    text = path.read_text(encoding="utf-8")
-    criteria = []
-    current: dict | None = None
-    in_criteria = False
-    buffer_key: str | None = None
-    buffer_lines: list[str] = []
-
-    def _flush_buffer():
-        nonlocal buffer_key, buffer_lines, current
-        if buffer_key and buffer_lines and current is not None:
-            current[buffer_key] = " ".join(buffer_lines).strip()
-            buffer_key = None
-            buffer_lines = []
-
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        # Detect start of criteria block
-        if stripped == "criteria:":
-            in_criteria = True
-            continue
-
-        if not in_criteria:
-            continue
-
-        # New criterion item
-        if stripped.startswith("- name:"):
-            _flush_buffer()
-            if current:
-                criteria.append(current)
-            current = {"name": stripped.split(":", 1)[1].strip()}
-            continue
-
-        if current is None:
-            continue
-
-        # Simple key: value on same line
-        m = re.match(r"(\w+):\s+(.+)", stripped)
-        if m:
-            _flush_buffer()
-            key, val = m.group(1), m.group(2)
-            if key == "weight":
-                current[key] = float(val)
-            else:
-                current[key] = val
-            continue
-
-        # Multi-line block scalar (> or |)
-        m2 = re.match(r"(\w+):\s*[>|]?\s*$", stripped)
-        if m2:
-            _flush_buffer()
-            buffer_key = m2.group(1)
-            buffer_lines = []
-            continue
-
-        # Continuation of a block scalar
-        if buffer_key:
-            buffer_lines.append(stripped)
-            continue
-
-    _flush_buffer()
-    if current:
-        criteria.append(current)
-
-    return {"criteria": criteria}
+    """Load eval_spec.yaml using PyYAML (required, listed in requirements.txt)."""
+    import yaml
+    with path.open(encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 
 # ── Load spec ─────────────────────────────────────────────────────────────────

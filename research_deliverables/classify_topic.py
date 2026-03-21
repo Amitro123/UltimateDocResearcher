@@ -29,6 +29,7 @@ ALL_DELIVERABLES = [
     "SUMMARY.md",
     "ARCHITECTURE.md",
     "IMPLEMENTATION.md",
+    "PLAN.md",
     "RISKS.md",
     "BENCHMARKS.md",
     "NEXT_STEPS.md",
@@ -39,6 +40,7 @@ _TEMPLATE_MAP: dict[str, str] = {
     "SUMMARY.md":        "summary.jinja2",
     "ARCHITECTURE.md":   "architecture.jinja2",
     "IMPLEMENTATION.md": "implementation.jinja2",
+    "PLAN.md":           "plan.jinja2",
     "RISKS.md":          "risks.jinja2",
     "BENCHMARKS.md":     "benchmarks.jinja2",
     "NEXT_STEPS.md":     "next_steps.jinja2",
@@ -115,63 +117,89 @@ def classify_topic(topic: str) -> DeliverableSet:
 def _build_deliverable_set(rtype: ResearchType, topic: str) -> DeliverableSet:
     """Build the DeliverableSet for a given research type."""
 
+    # Phase 11: every topic type produces the full canonical package:
+    #   SUMMARY + ARCHITECTURE (Mermaid) + PLAN (5-step) + RISKS (3 failure modes)
+    #   + BENCHMARKS + CODE
+    # The focus_hint and extra_sections tune the *content* per type.
+
     if rtype == "code":
         return DeliverableSet(
             research_type="code",
-            deliverables=["SUMMARY.md", "IMPLEMENTATION.md", "NEXT_STEPS.md"],
+            deliverables=[
+                "SUMMARY.md", "ARCHITECTURE.md", "PLAN.md",
+                "RISKS.md", "BENCHMARKS.md",
+            ],
             focus_hint=(
                 "Focus on concrete, copy-paste-ready code patterns, SDK usage, "
                 "and implementation gotchas. Prefer working code over theory."
             ),
             extra_sections={
-                "IMPLEMENTATION.md": ["Key APIs", "Code Patterns", "Common Pitfalls"],
-                "NEXT_STEPS.md": ["Quick Wins", "Medium-term Improvements"],
+                "ARCHITECTURE.md": ["Component Diagram", "Data Flow", "Trade-offs"],
+                "PLAN.md":         [],
+                "RISKS.md":        [],
+                "BENCHMARKS.md":   ["Comparison Table", "Performance Numbers",
+                                    "When to Use Each Option"],
             },
         )
 
     if rtype == "arch":
         return DeliverableSet(
             research_type="arch",
-            deliverables=["SUMMARY.md", "ARCHITECTURE.md", "RISKS.md", "NEXT_STEPS.md"],
+            deliverables=[
+                "SUMMARY.md", "ARCHITECTURE.md", "PLAN.md",
+                "RISKS.md", "BENCHMARKS.md",
+            ],
             focus_hint=(
                 "Focus on component boundaries, data flows, trade-offs between "
-                "design options, and scalability considerations. Include ASCII "
-                "diagrams where helpful."
+                "design options, and scalability considerations. Use Mermaid "
+                "diagrams."
             ),
             extra_sections={
                 "ARCHITECTURE.md": ["Component Diagram", "Data Flow", "Trade-offs"],
-                "RISKS.md": ["Technical Debt", "Scalability Risks", "Security Concerns"],
+                "PLAN.md":         [],
+                "RISKS.md":        [],
+                "BENCHMARKS.md":   ["Comparison Table", "Performance Numbers"],
             },
         )
 
     if rtype == "process":
         return DeliverableSet(
             research_type="process",
-            deliverables=["SUMMARY.md", "IMPLEMENTATION.md", "RISKS.md", "NEXT_STEPS.md"],
+            deliverables=[
+                "SUMMARY.md", "ARCHITECTURE.md", "PLAN.md",
+                "RISKS.md", "BENCHMARKS.md",
+            ],
             focus_hint=(
                 "Focus on step-by-step workflows, tooling choices, evaluation "
                 "metrics, and operational concerns. Make each step actionable."
             ),
             extra_sections={
-                "IMPLEMENTATION.md": ["Prerequisites", "Step-by-Step Workflow",
-                                      "Tooling", "Evaluation Metrics"],
-                "RISKS.md": ["Process Risks", "Tool Failures", "Data Quality Issues"],
+                "ARCHITECTURE.md": ["Component Diagram", "Data Flow", "Trade-offs"],
+                "PLAN.md":         [],
+                "RISKS.md":        [],
+                "BENCHMARKS.md":   ["Comparison Table", "Performance Numbers",
+                                    "Cost Analysis"],
             },
         )
 
     # "market" — survey / landscape
     return DeliverableSet(
         research_type="market",
-        deliverables=["SUMMARY.md", "BENCHMARKS.md", "RISKS.md", "NEXT_STEPS.md"],
+        deliverables=[
+            "SUMMARY.md", "ARCHITECTURE.md", "PLAN.md",
+            "RISKS.md", "BENCHMARKS.md",
+        ],
         focus_hint=(
             "Focus on comparative analysis, quantitative benchmarks, "
             "vendor/tool trade-offs, and decision criteria for choosing "
             "between options. Use tables where applicable."
         ),
         extra_sections={
-            "BENCHMARKS.md": ["Comparison Table", "Performance Numbers",
-                              "Cost Analysis", "When to Use Each Option"],
-            "NEXT_STEPS.md": ["Decision Framework", "Recommended Tools"],
+            "ARCHITECTURE.md": ["Component Diagram", "Data Flow", "Trade-offs"],
+            "PLAN.md":         [],
+            "RISKS.md":        [],
+            "BENCHMARKS.md":   ["Comparison Table", "Performance Numbers",
+                                "Cost Analysis", "When to Use Each Option"],
         },
     )
 

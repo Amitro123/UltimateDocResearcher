@@ -35,16 +35,16 @@ class TestLoadSpec(unittest.TestCase):
     def test_spec_file_exists(self):
         self.assertTrue(SPEC_PATH.exists(), f"eval_spec.yaml not found at {SPEC_PATH}")
 
-    def test_loads_5_criteria(self):
+    def test_loads_6_criteria(self):
         from eval.run_eval import load_spec
         criteria = load_spec(SPEC_PATH)
-        self.assertEqual(len(criteria), 5, f"Expected 5 criteria, got {len(criteria)}")
+        self.assertEqual(len(criteria), 6, f"Expected 6 criteria, got {len(criteria)}")
 
     def test_expected_criterion_names(self):
         from eval.run_eval import load_spec
         criteria = load_spec(SPEC_PATH)
         names = {c["name"] for c in criteria}
-        expected = {"clarity", "completeness", "actionability", "freshness", "anti_patterns"}
+        expected = {"clarity", "completeness", "actionability", "freshness", "anti_patterns", "external_novelty"}
         self.assertEqual(names, expected)
 
     def test_all_criteria_have_questions(self):
@@ -71,21 +71,14 @@ class TestLoadSpec(unittest.TestCase):
             "clarity should have the highest weight"
         )
 
-    def test_minimal_parser_matches_pyyaml(self):
-        """If PyYAML is available, both parsers should agree on criteria names."""
-        try:
-            import yaml
-        except ImportError:
-            self.skipTest("PyYAML not installed — skip cross-parser comparison")
-
-        from eval.run_eval import load_spec, _minimal_yaml_load
-
-        pyyaml_data = load_spec(SPEC_PATH)
-        minimal_data = _minimal_yaml_load(SPEC_PATH).get("criteria", [])
-
-        pyyaml_names = sorted(c["name"] for c in pyyaml_data)
-        minimal_names = sorted(c["name"] for c in minimal_data)
-        self.assertEqual(pyyaml_names, minimal_names)
+    def test_load_yaml_uses_pyyaml(self):
+        """_load_yaml should successfully load the spec via PyYAML."""
+        import yaml  # pyyaml is in requirements.txt — must be present
+        from eval.run_eval import _load_yaml
+        data = _load_yaml(SPEC_PATH)
+        self.assertIn("criteria", data)
+        self.assertIsInstance(data["criteria"], list)
+        self.assertGreater(len(data["criteria"]), 0)
 
 
 # ── compute_weighted_score ────────────────────────────────────────────────────
@@ -132,7 +125,7 @@ class TestComputeWeightedScore(unittest.TestCase):
         result = compute_weighted_score(scores, criteria)
         self.assertAlmostEqual(result, 4.0, places=2)
 
-    def test_real_spec_5_criteria(self):
+    def test_real_spec_6_criteria(self):
         """Smoke test: full spec with scores of 4 → weighted avg should be 4."""
         from eval.run_eval import load_spec, compute_weighted_score
         criteria = load_spec(SPEC_PATH)
@@ -309,7 +302,7 @@ class TestEvaluate(unittest.TestCase):
 
         self.assertIn("summary", report)
         self.assertIn("criteria", report)
-        self.assertEqual(len(report["criteria"]), 5)
+        self.assertEqual(len(report["criteria"]), 6)
 
     def test_evaluate_writes_json_file(self):
         from eval.run_eval import evaluate
@@ -424,7 +417,7 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual(summary["judge_model"], "ollama:test")
         self.assertEqual(summary["threshold_used"], 3.0)
         self.assertIsInstance(summary["criterion_scores"], dict)
-        self.assertEqual(len(summary["criterion_scores"]), 5)
+        self.assertEqual(len(summary["criterion_scores"]), 6)
 
 
 if __name__ == "__main__":

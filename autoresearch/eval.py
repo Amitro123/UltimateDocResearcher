@@ -52,14 +52,26 @@ class JudgeScores:
         """Parse judge LLM output into structured scores."""
         def _extract(label: str) -> int:
             m = re.search(rf"{label}[:\s]+([1-5])", text, re.I)
-            return int(m.group(1)) if m else 3  # default middle score
+            if m:
+                return int(m.group(1))
+            print(
+                f"[eval] ⚠️  Could not parse '{label}' score from judge output — "
+                f"defaulting to 3. Judge response was: {text[:200]!r}",
+                file=sys.stderr,
+            )
+            return 3  # default middle score
 
         acc = _extract("accuracy")
         rel = _extract("relevance")
         comp = _extract("completeness")
-        # Extract reasoning block
-        reasoning_m = re.search(r"(?:reasoning|explanation)[:\s]+(.+)", text, re.I | re.DOTALL)
-        reasoning = reasoning_m.group(1).strip()[:500] if reasoning_m else text[:300]
+        # Extract reasoning block (use .* so empty trailing text still matches)
+        reasoning_m = re.search(r"(?:reasoning|explanation)[:\s]*(.*)", text, re.I | re.DOTALL)
+        if reasoning_m:
+            reasoning = reasoning_m.group(1).strip()[:500]
+        else:
+            reasoning = text[:300]
+        if not reasoning:
+            reasoning = f"(judge provided no explanation — raw: {text[:200]})"
         overall = round((acc * 0.4 + rel * 0.35 + comp * 0.25), 2)
         return cls(acc, rel, comp, reasoning, overall)
 
@@ -86,11 +98,11 @@ Score the provided answer against the reference on three axes (1=very poor, 5=ex
   Relevance    – how directly it answers the question
   Completeness – coverage of key points in the reference
 
-Reply in this exact format:
+Reply in this exact format (you MUST write at least one full sentence after "Reasoning:"):
   Accuracy: <1-5>
   Relevance: <1-5>
   Completeness: <1-5>
-  Reasoning: <one short paragraph>
+  Reasoning: <one short paragraph explaining your scores>
 """
 
 def _judge_prompt(question: str, reference: str, model_answer: str) -> str:
@@ -347,17 +359,35 @@ def run_eval(
 
 
 def _worst_samples(results: list[SampleResult], n: int = 3) -> list[dict]:
-    sorted_r = sorted(results, key=lambda r: r.scores.overall)
+    def _safe_overall(r: SampleResult) -> float:
+        s = r.scores
+        return float(s.get("overall", 3.0) if isinstance(s, dict) else getattr(s, "overall", 3.0))
+
+    def _safe_reasoning(r: SampleResult) -> str:
+        s = r.scores
+        val = s.get("reasoning", "") if isinstance(s, dict) else getattr(s, "reasoning", "")
+        return str(val)[:200]
+
+    sorted_r = sorted(results, key=_safe_overall)
     return [
-        {"question": r.question[:150], "overall": r.scores.overall, "reasoning": r.scores.reasoning[:200]}
+        {"question": r.question[:150], "overall": _safe_overall(r), "reasoning": _safe_reasoning(r)}
         for r in sorted_r[:n]
     ]
 
 
 def _best_samples(results: list[SampleResult], n: int = 3) -> list[dict]:
-    sorted_r = sorted(results, key=lambda r: r.scores.overall, reverse=True)
+    def _safe_overall(r: SampleResult) -> float:
+        s = r.scores
+        return float(s.get("overall", 3.0) if isinstance(s, dict) else getattr(s, "overall", 3.0))
+
+    def _safe_reasoning(r: SampleResult) -> str:
+        s = r.scores
+        val = s.get("reasoning", "") if isinstance(s, dict) else getattr(s, "reasoning", "")
+        return str(val)[:200]
+
+    sorted_r = sorted(results, key=_safe_overall, reverse=True)
     return [
-        {"question": r.question[:150], "overall": r.scores.overall, "reasoning": r.scores.reasoning[:200]}
+        {"question": r.question[:150], "overall": _safe_overall(r), "reasoning": _safe_reasoning(r)}
         for r in sorted_r[:n]
     ]
 

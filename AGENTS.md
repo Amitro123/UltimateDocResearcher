@@ -261,6 +261,46 @@ displayed in a simple React dashboard.
 
 ---
 
+## 🚀 Phase 13 — E2E Research Orchestrator + Incremental Mode
+
+**Goal:** Single command → full research package.
+`python -m autoresearch.research --topic "X" --pdf-dir papers/ --output results/X`
+
+### Current State (Excellent)
+✅ Collector works perfectly
+✅ Analyzer filters high-signal content  
+✅ NotebookLM Q&A = 5.0/5 quality
+✅ Multi-format outputs ready
+✅ Dashboard tracking runs
+
+### Tasks
+
+#### 1. Create autoresearch/research.py (E2E Orchestrator)
+Orchestrates:
+- Incremental collect
+- Analyze (new chunks)
+- Prepare Q&A
+- Eval & Package generation
+- Dashboard registration
+
+#### 2. Incremental Collector
+`metadata.jsonl` tracks `file_hash`, `last_modified`, and `url_hash`.
+Logic: Skip unchanged sources, append new content only.
+
+#### 3. CLI & Dashboard Integration
+- `python -m autoresearch.research`
+- Streamlit `dashboard/app.py` → "New Research" button.
+
+### Deliverables
+- `autoresearch/research.py`
+- `autoresearch/incremental_collect.py`
+- `autoresearch/cli.py`
+- Updated `dashboard/app.py` and `README.md`.
+
+*Start with research.py skeleton → incremental_collect → CLI → Streamlit button!*
+
+---
+
 ## Agent Communication Protocol
 
 When running multiple agents in parallel (e.g., Collect + Train simultaneously

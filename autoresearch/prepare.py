@@ -101,7 +101,7 @@ def notebooklm_qa_from_sources(
     quiz_difficulty: str = "medium",
 ) -> list[tuple[str, str]]:
     """
-    Generate Q&A pairs using Google NotebookLM via notebooklm-py.
+    Generate Q&A pairs using Google NotebookLM via notebooklm-py (v0.3+).
 
     Each source can be a local PDF path, a URL, or a Google Drive URL.
     NotebookLM ingests them, then generates a quiz whose questions become
@@ -120,7 +120,7 @@ def notebooklm_qa_from_sources(
         list of (question, answer) tuples, or [] on any failure
     """
     try:
-        from notebooklm import NotebookLM        # notebooklm-py
+        from notebooklm import NotebookLMClient, QuizDifficulty  # notebooklm-py v0.3+
     except ImportError:
         print(
             "[prepare] notebooklm-py not installed. "
@@ -129,62 +129,120 @@ def notebooklm_qa_from_sources(
         )
         return []
 
-    pairs: list[tuple[str, str]] = []
-    notebook_id = None
+    import asyncio
+    import json
+    import tempfile
+
+    # Map difficulty string to enum
+    _difficulty_map = {
+        "easy": QuizDifficulty.EASY,
+        "medium": QuizDifficulty.MEDIUM,
+        "hard": QuizDifficulty.HARD,
+    }
+    difficulty_enum = _difficulty_map.get(quiz_difficulty.lower(), QuizDifficulty.MEDIUM)
+
+    async def _run() -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        notebook_id = None
+
+        async with await NotebookLMClient.from_storage() as client:
+            try:
+                # Create a fresh notebook for this run
+                notebook = await client.notebooks.create(f"autoresearch-{os.getpid()}")
+                notebook_id = notebook.id
+                print(f"[prepare/notebooklm] Created notebook {notebook_id}")
+
+                # Add all sources (wait for each to be processed)
+                for src in sources:
+                    try:
+                        if Path(src).exists():
+                            await client.sources.add_file(notebook_id, src, wait=True)
+                            print(f"[prepare/notebooklm]   + PDF: {Path(src).name}")
+                        else:
+                            await client.sources.add_url(notebook_id, src, wait=True)
+                            print(f"[prepare/notebooklm]   + URL: {src}")
+                    except Exception as e:
+                        print(
+                            f"[prepare/notebooklm]   warning: source skipped ({src}): {e}",
+                            file=sys.stderr,
+                        )
+
+                # Generate quiz
+                print(f"[prepare/notebooklm] Generating {quiz_difficulty} quiz...")
+                status = await client.artifacts.generate_quiz(
+                    notebook_id, difficulty=difficulty_enum
+                )
+
+                # Wait for quiz generation to complete
+                status = await client.artifacts.wait_for_completion(
+                    notebook_id, status.task_id, timeout=300.0
+                )
+
+                if status.is_failed:
+                    print(
+                        f"[prepare/notebooklm] Quiz generation failed: {status.error}",
+                        file=sys.stderr,
+                    )
+                    return []
+
+                # Download quiz JSON to a temp file and parse Q&A pairs
+                with tempfile.NamedTemporaryFile(
+                    suffix=".json", delete=False, mode="w", encoding="utf-8"
+                ) as tf:
+                    tmp_path = tf.name
+
+                quiz_path = await client.artifacts.download_quiz(
+                    notebook_id, tmp_path, artifact_id=status.task_id, output_format="json"
+                )
+
+                with open(quiz_path, encoding="utf-8") as f:
+                    quiz_data = json.load(f)
+
+                try:
+                    os.unlink(quiz_path)
+                except OSError:
+                    pass
+
+                # quiz_data = {"title": "...", "questions": [{
+                #   "question": "...",
+                #   "answerOptions": [{"text": "...", "isCorrect": true/false}],
+                #   "hint": "..."
+                # }]}
+                questions = quiz_data.get("questions", [])
+                for item in questions[:max_pairs]:
+                    q = item.get("question", "").strip()
+                    # Build answer from the correct option(s) + optional hint
+                    correct_opts = [
+                        opt.get("text", "")
+                        for opt in item.get("answerOptions", [])
+                        if opt.get("isCorrect")
+                    ]
+                    a = correct_opts[0] if correct_opts else ""
+                    if item.get("hint"):
+                        a = f"{a}. {item['hint']}" if a else item["hint"]
+                    if q and a:
+                        pairs.append((q, a.strip()))
+
+                print(f"[prepare/notebooklm] {len(pairs)} Q&A pairs from quiz")
+
+            except Exception as exc:
+                print(f"[prepare/notebooklm] Failed: {exc}", file=sys.stderr)
+
+            finally:
+                if notebook_id:
+                    try:
+                        await client.notebooks.delete(notebook_id)
+                        print(f"[prepare/notebooklm] Deleted notebook {notebook_id}")
+                    except Exception:
+                        pass
+
+        return pairs
 
     try:
-        client = NotebookLM()
-
-        # Create a fresh notebook for this run
-        notebook = client.notebooks.create(f"autoresearch-{os.getpid()}")
-        notebook_id = notebook.id
-        print(f"[prepare/notebooklm] Created notebook {notebook_id}")
-
-        # Add all sources
-        for src in sources:
-            try:
-                if Path(src).exists():
-                    client.sources.add(notebook_id, file=src)
-                    print(f"[prepare/notebooklm]   + PDF: {Path(src).name}")
-                else:
-                    client.sources.add(notebook_id, url=src)
-                    print(f"[prepare/notebooklm]   + URL: {src}")
-            except Exception as e:
-                print(f"[prepare/notebooklm]   ⚠ source skipped ({src}): {e}", file=sys.stderr)
-
-        # Generate quiz and wait for completion
-        print(f"[prepare/notebooklm] Generating {quiz_difficulty} quiz…")
-        quiz = client.generate(notebook_id, "quiz", difficulty=quiz_difficulty, wait=True)
-
-        # Extract Q&A from quiz items
-        items = quiz.get("items") or quiz.get("questions") or []
-        for item in items[:max_pairs]:
-            q = item.get("question", "").strip()
-            # Prefer detailed answer; fall back to first option
-            a = (
-                item.get("answer")
-                or item.get("explanation")
-                or item.get("correct_answer")
-                or next(iter(item.get("options", {}).values()), "")
-            )
-            if q and a:
-                pairs.append((q, str(a).strip()))
-
-        print(f"[prepare/notebooklm] ✅ {len(pairs)} Q&A pairs from quiz")
-
+        return asyncio.run(_run())
     except Exception as exc:
-        print(f"[prepare/notebooklm] Failed: {exc}", file=sys.stderr)
-
-    finally:
-        # Clean up notebook to avoid cluttering the user's NotebookLM
-        if notebook_id:
-            try:
-                client.notebooks.delete(notebook_id)
-                print(f"[prepare/notebooklm] Deleted notebook {notebook_id}")
-            except Exception:
-                pass
-
-    return pairs
+        print(f"[prepare/notebooklm] Async runner failed: {exc}", file=sys.stderr)
+        return []
 
 
 def notebooklm_qa_from_corpus(

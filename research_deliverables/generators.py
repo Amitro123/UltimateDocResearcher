@@ -116,46 +116,55 @@ def _extract_or_default(sections: dict[str, str], *keys: str,
 
 _SUMMARY_SYSTEM = """\
 You are a technical research analyst. Given a research corpus extract, produce a
-concise executive summary for a developer audience.
+concise executive summary for a developer audience. Target ~300 words total.
 
 Structure your response with these exact ## headings:
 ## Overview
-(2-3 sentence description of the research topic and its significance)
+(2-3 sentences: what the topic is, why it matters right now)
 
 ## Key Findings
-(5-7 bullet points of the most important insights from the corpus)
+(5-7 bullet points, each a single crisp sentence — the most actionable insights)
 
 ## Recommended Next Action
-(1-2 sentences: the single most impactful thing to do with these findings)
+(1 sentence: the single highest-leverage thing to do with these findings)
 
-Be specific. Reference actual techniques, libraries, or patterns from the corpus.
-No filler phrases.
+Be specific. Reference actual techniques, libraries, or metric names from the corpus.
+No filler phrases. Aim for density: every sentence must carry new information.
 """
 
 _ARCHITECTURE_SYSTEM = """\
 You are a senior software architect. Given a research corpus extract, produce a
-concise architecture document.
+concise architecture document with a Mermaid diagram.
 
 Structure your response with these exact ## headings:
 ## System Overview
 (2-3 sentences describing the overall system architecture)
 
 ## Component Diagram
-(ASCII box-and-arrow diagram showing main components and their relationships)
+(A valid Mermaid flowchart — wrap it in ```mermaid ... ``` fences.
+Use flowchart LR or TD. Label edges. Show all major components and their
+relationships. Example skeleton:
+```mermaid
+flowchart LR
+    A[Collector] -->|raw docs| B[Analyzer]
+    B -->|cleaned corpus| C[LLM]
+    C -->|suggestions| D[Results]
+```
+)
 
 ## Components
-(Numbered list: component name, responsibility, key interface)
+(Numbered list: component name — one-line responsibility — key interface/API)
 
 ## Data Flow
-(Step-by-step description of how data moves through the system)
+(Step-by-step: how data enters, transforms, and exits the system)
 
 ## Trade-offs
-(3-5 bullet points: what this architecture optimises for and what it sacrifices)
+(3-5 bullet points: what this architecture optimises for vs. what it sacrifices)
 
 ## Design Decisions
-(2-3 key design decisions with brief rationale)
+(2-3 key decisions with brief rationale — what alternatives were rejected)
 
-Use concrete component names from the corpus. Include ASCII art diagrams.
+Use concrete component names from the corpus. The Mermaid diagram must be valid syntax.
 """
 
 _IMPLEMENTATION_SYSTEM = """\
@@ -188,29 +197,24 @@ Be specific. Use real API names and function signatures from the corpus.
 """
 
 _RISKS_SYSTEM = """\
-You are a technical risk analyst. Given a research corpus, produce a risk register.
+You are a technical risk analyst. Given a research corpus, identify the 3 most
+critical failure modes and produce a focused risk register.
 
 Structure your response with these exact ## headings:
 ## Risk Summary
-(1-2 sentence overview of the risk landscape)
+(1 sentence: the dominant risk theme across all three failure modes)
 
 ## Risk Register
-(Markdown table with columns: Risk | Likelihood | Impact | Mitigation)
+(Markdown table with exactly 3 rows — the 3 most critical failure modes.
+Columns: Failure Mode | Likelihood | Impact | Mitigation
 Use High/Medium/Low for Likelihood and Impact.
-
-## Technical Debt
-(Bullet list of technical debt items introduced by this approach)
-
-## Scalability Risks
-(Bullet list of risks as load / data volume increases)
-
-## Security Concerns
-(Bullet list of security considerations)
+Each "Failure Mode" cell must name a concrete, specific failure — not a generic label.)
 
 ## Mitigation Priorities
-(Ordered list: top 3 risks to address first, with specific mitigation steps)
+(Ordered list 1-3: for each failure mode, one concrete mitigation step with
+the team/role responsible and a measurable success criterion)
 
-Be concrete. Name specific failure modes, not generic risks like "it might fail".
+Be concrete. Name specific failure modes tied to the research topic.
 """
 
 _BENCHMARKS_SYSTEM = """\
@@ -265,10 +269,40 @@ Structure your response with these exact ## headings:
 Be specific. Each action should have a clear owner, deliverable, and success criterion.
 """
 
+_PLAN_SYSTEM = """\
+You are a senior engineering lead writing a 5-step rollout plan. Given a research
+corpus extract, produce a concrete, time-boxed implementation roadmap.
+
+Structure your response with these exact ## headings:
+## 5-Step Rollout
+(Exactly 5 numbered steps. Each step must have:
+  - A bold title (e.g. **Step 1: Baseline instrumentation**)
+  - 1-2 sentences describing what is built/done
+  - A concrete deliverable (e.g. "merged PR", "green CI badge", "deployed endpoint")
+Steps should build on each other and go from least to most risky.)
+
+## Timeline Estimate
+(Table: Step | Effort | Owner Role
+Use T-shirt sizes: XS=<1 day, S=1-3 days, M=1 week, L=2-3 weeks)
+
+## Dependencies
+(Bullet list: external services, libraries, or team approvals needed before starting)
+
+## Success Criteria
+(Bullet list of measurable exit criteria for the full rollout —
+quantified where possible: latency target, accuracy threshold, error rate, etc.)
+
+## Rollback Strategy
+(2-3 sentences: how to revert if step 3 or 4 fails — be specific about what breaks)
+
+No vague advice. Every step must have a clear start/end state.
+"""
+
 _SYSTEM_PROMPTS = {
     "SUMMARY.md":        _SUMMARY_SYSTEM,
     "ARCHITECTURE.md":   _ARCHITECTURE_SYSTEM,
     "IMPLEMENTATION.md": _IMPLEMENTATION_SYSTEM,
+    "PLAN.md":           _PLAN_SYSTEM,
     "RISKS.md":          _RISKS_SYSTEM,
     "BENCHMARKS.md":     _BENCHMARKS_SYSTEM,
     "NEXT_STEPS.md":     _NEXT_STEPS_SYSTEM,
@@ -490,12 +524,44 @@ def generate_next_steps(
     })
 
 
+def generate_plan(
+    topic: str,
+    corpus_extract: str,
+    source_note: str,
+    deliverable_set,
+    run_id: str,
+    corpus_stats: dict,
+    model: Optional[str] = None,
+) -> str:
+    print("[deliverables] Generating PLAN.md …")
+    user = _user_prompt(topic, corpus_extract, source_note,
+                        deliverable_set.focus_hint)
+    raw = _llm_chat(_PLAN_SYSTEM, user, model=model, max_tokens=2048)
+    sections = _extract_sections(raw)
+
+    from research_deliverables.classify_topic import template_for
+    return _render_template(template_for("PLAN.md"), {
+        "topic":            topic,
+        "timestamp":        corpus_stats.get("timestamp", ""),
+        "run_id":           run_id,
+        "steps":            _extract_or_default(sections, "5-step_rollout",
+                                                 "5_step_rollout", "steps"),
+        "timeline":         _extract_or_default(sections, "timeline_estimate",
+                                                 "timeline"),
+        "dependencies":     _extract_or_default(sections, "dependencies"),
+        "success_criteria": _extract_or_default(sections, "success_criteria"),
+        "rollback":         _extract_or_default(sections, "rollback_strategy",
+                                                 "rollback"),
+    })
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _GENERATORS = {
     "SUMMARY.md":        generate_summary,
     "ARCHITECTURE.md":   generate_architecture,
     "IMPLEMENTATION.md": generate_implementation,
+    "PLAN.md":           generate_plan,
     "RISKS.md":          generate_risks,
     "BENCHMARKS.md":     generate_benchmarks,
     "NEXT_STEPS.md":     generate_next_steps,

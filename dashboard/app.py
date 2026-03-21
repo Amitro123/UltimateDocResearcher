@@ -286,6 +286,19 @@ elif page == "New Run":
     iterations = col2.number_input("Iterations", min_value=1, max_value=20, value=3)
     threshold = col3.number_input("Similarity threshold", min_value=0.5, max_value=1.0, value=0.8, step=0.05)
 
+    col4, col5 = st.columns(2)
+    incremental = col4.checkbox(
+        "Incremental collect",
+        value=True,
+        help="Skip unchanged sources (faster re-runs). Uncheck to re-collect everything.",
+    )
+    force_recollect = col5.checkbox(
+        "Force re-collect",
+        value=False,
+        help="With incremental: ignore cache and re-collect all sources.",
+        disabled=not incremental,
+    )
+
     if topic:
         # Check for similar past runs
         similar = mem.find_similar(topic, threshold=threshold)
@@ -338,16 +351,23 @@ elif page == "New Run":
                 st.session_state["last_run_id"] = run_id
                 st.success(f"Run #{run_id} registered. Refresh 'Recent Runs' to track progress.")
 
-                # Show multi-format research command
+                # Show multi-format research command (Phase 13 CLI)
                 st.divider()
-                st.markdown("**Or generate a full research package:**")
-                research_cmd = [
-                    sys.executable, "-m", "autoresearch.research",
+                st.markdown("**Or generate a full research package (Phase 13 one-command):**")
+                cli_cmd = [
+                    sys.executable, "-m", "autoresearch.cli",
                     "--topic", topic,
-                    "--corpus", "data/all_docs_cleaned.txt",
+                    "--full",
                 ]
-                st.code(" ".join(research_cmd), language="bash")
-                st.caption("Generates SUMMARY, ARCHITECTURE, IMPLEMENTATION, RISKS, NEXT_STEPS.")
+                if incremental:
+                    cli_cmd.append("--incremental")
+                if force_recollect and incremental:
+                    cli_cmd.append("--force-recollect")
+                st.code(" ".join(cli_cmd), language="bash")
+                st.caption(
+                    "Runs collect → analyze → prepare → package in one command. "
+                    + ("Incremental mode: skips unchanged sources." if incremental else "Full re-collect.")
+                )
 
 
 # ── Page: Research Packages ───────────────────────────────────────────────────

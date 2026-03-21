@@ -127,6 +127,14 @@ def main() -> int:
         help="Run the document collector before generating deliverables"
     )
     parser.add_argument(
+        "--incremental", action="store_true",
+        help="With --collect: use incremental mode (skip unchanged sources)"
+    )
+    parser.add_argument(
+        "--force-recollect", action="store_true",
+        help="With --collect --incremental: ignore cached hashes and re-collect all"
+    )
+    parser.add_argument(
         "--analyze", action="store_true",
         help="Run corpus analysis before generating deliverables"
     )
@@ -164,11 +172,24 @@ def main() -> int:
 
     # ── Optional: collect ──────────────────────────────────────────────────
     if args.collect:
-        _run_collect(
-            topic=args.topic,
-            pdf_dir=str(ROOT / args.pdf_dir),
-            output_dir=str(data_dir),
-        )
+        if args.incremental:
+            from autoresearch.incremental_collect import IncrementalCollector
+            ic = IncrementalCollector(
+                data_dir=str(data_dir),
+                pdf_dir=str(ROOT / args.pdf_dir),
+                verbose=True,
+            )
+            new, skipped = ic.run(
+                topic=args.topic,
+                force=getattr(args, "force_recollect", False),
+            )
+            print(f"[research] Incremental collect: {new} new docs, {skipped} skipped")
+        else:
+            _run_collect(
+                topic=args.topic,
+                pdf_dir=str(ROOT / args.pdf_dir),
+                output_dir=str(data_dir),
+            )
 
     # ── Optional: analyze ─────────────────────────────────────────────────
     if args.analyze or args.collect:
@@ -217,7 +238,7 @@ def main() -> int:
         mem = RunMemory(ROOT / "dashboard" / "runs.db")
         # Store the package output dir as notes, suggestions_path as CODE file
         code_path = pkg.files.get("CODE/code_suggestions.md")
-        mem.complete_run(
+        mem.finish_run(
             run_id=None,   # new entry (no pre-registered run)
             topic=pkg.topic,
             suggestions_path=str(code_path.relative_to(ROOT)) if code_path else None,
@@ -230,4 +251,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     sys.exit(main())
