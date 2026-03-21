@@ -272,12 +272,11 @@ class IncrementalCollector:
             return 0
 
         collector = UltimateCollector(
-            pdf_dir=str(self.pdf_dir) if new_files else None,
-            queries=queries,
+            pdf_paths=[str(self.pdf_dir)] if new_files else None,
+            google_queries=queries,
             urls=new_urls,
             github_repos=new_repos,
             output_dir=str(self.data_dir),
-            topic=topic,
         )
 
         # Capture docs before running so we know the delta

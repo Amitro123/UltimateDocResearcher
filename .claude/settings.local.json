@@ -64,7 +64,9 @@
       "Bash(python dashboard/seed_demo.py)",
       "Bash(cmd /c \"chcp 65001 >nul && python dashboard/seed_demo.py\")",
       "Bash(python -u dashboard/seed_demo.py)",
-      "Bash(python new_run.py --topic \"Vertex AI Agent Builder indexing errors\")"
+      "Bash(python new_run.py --topic \"Vertex AI Agent Builder indexing errors\")",
+      "Bash(python -c \"from autoresearch.llm_client import best_available_model; print\\(best_available_model\\(\\)\\)\")",
+      "Bash(python -m autoresearch.prepare --corpus data/all_docs_cleaned.txt --max-pairs 30 --use-llm --model gemini-2.5-flash-lite)"
     ]
   }
 }
