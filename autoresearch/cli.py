@@ -93,13 +93,13 @@ def _step_collect(args) -> bool:
 def _step_analyze(args) -> bool:
     """Analyze corpus. Returns True on success."""
     print("\n[cli] Step 2/4 — Analyze corpus")
-    corpus_path = ROOT / args.corpus
-    if not corpus_path.exists():
-        print(f"[cli]   ⚠️  Corpus not found at {corpus_path}, skipping analyze")
+    input_path = ROOT / args.data_dir / "all_docs.txt"
+    if not input_path.exists():
+        print(f"[cli]   ⚠️  Corpus not found at {input_path}, skipping analyze")
         return False
     try:
         from collector.analyzer import analyze_corpus
-        report = analyze_corpus(str(corpus_path), output_dir=str(ROOT / args.data_dir), verbose=True)
+        report = analyze_corpus(str(input_path), output_dir=str(ROOT / args.data_dir), verbose=True)
         total = report.get("total_docs", "?")
         kept = report.get("kept_docs", "?")
         print(f"[cli]   Corpus: {total} docs → {kept} after filtering")
@@ -151,8 +151,53 @@ def _step_package(args) -> int:
         cmd += ["--model", args.model]
     if args.no_code:
         cmd.append("--no-code")
+    
+    # Also forward the input type if present
+    if hasattr(args, 'input_type') and args.input_type:
+        cmd += ["--input-type", args.input_type]
+        
     result = subprocess.run(cmd, cwd=str(ROOT))
     return result.returncode
+
+
+def _step_eval(args) -> bool:
+    """Run evaluations on Q&A and generated deliverables."""
+    print("\n[cli] Step Eval — Running Evaluations")
+    import subprocess
+    # Eval Q&A
+    val_path = ROOT / args.data_dir / "val.jsonl"
+    if val_path.exists():
+        print(f"[cli]   Evaluating Q&A pairs at {val_path}")
+        cmd_qna = [
+            sys.executable, "-m", "autoresearch.eval",
+            "--val-path", str(val_path),
+            "--max-samples", "10"
+        ]
+        if args.model:
+            cmd_qna += ["--judge-model", args.model]
+        subprocess.run(cmd_qna, cwd=str(ROOT))
+        
+    # Eval Output
+    if args.output:
+        code_path = ROOT / args.output / "CODE" / "code_suggestions.md"
+        if not code_path.exists():
+            code_path = ROOT / args.output / "code_suggestions.md"
+            
+        if code_path.exists():
+            print(f"[cli]   Evaluating output quality at {code_path}")
+            cmd_out = [
+                sys.executable, "-m", "eval.run_eval",
+                "--input", str(code_path),
+                "--threshold", "3.5"
+            ]
+            if args.model:
+                cmd_out += ["--judge", args.model]
+            subprocess.run(cmd_out, cwd=str(ROOT))
+        else:
+            print(f"[cli]   ⚠️  Code suggestions not found in {args.output}, skipping output eval")
+    else:
+        print("[cli]   ⚠️  No --output specified, skipping output deliverable evaluation.")
+    return True
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -181,6 +226,10 @@ def main() -> int:
     parser.add_argument("--analyze",    action="store_true", help="Analyze corpus")
     parser.add_argument("--prepare",    action="store_true", help="Generate Q&A pairs")
     parser.add_argument("--package",    action="store_true", help="Generate deliverable package")
+    parser.add_argument("--eval",       action="store_true", help="Run evaluations (Q&A and output)")
+    
+    # Input options
+    parser.add_argument("--input-type", default=None, help="Force input type (e.g. codebase)")
 
     # Collection options
     parser.add_argument("--incremental", action="store_true",
@@ -207,7 +256,7 @@ def main() -> int:
         args.collect = args.analyze = args.prepare = args.package = True
 
     # Default: at minimum, generate the package
-    if not any([args.collect, args.analyze, args.prepare, args.package, args.full]):
+    if not any([args.collect, args.analyze, args.prepare, args.package, args.eval, args.full]):
         args.package = True
 
     start = time.time()
@@ -227,8 +276,11 @@ def main() -> int:
     if args.prepare:
         _step_prepare(args)
 
-    if args.package or not any([args.collect, args.analyze, args.prepare]):
+    if args.package or not any([args.collect, args.analyze, args.prepare, args.eval]):
         exit_code = _step_package(args)
+
+    if args.eval:
+        _step_eval(args)
 
     elapsed = time.time() - start
     print(f"\n[cli] Pipeline complete in {elapsed:.1f}s")

@@ -78,12 +78,40 @@ def _with_retries(fn, *, retries: int = 3, base_delay: float = 1.0, jitter: floa
     ) from last_exc
 
 
+# ── Structural output validator ───────────────────────────────────────────────
+
+import re as _re
+
+def _validate_markdown_fences(text: str) -> None:
+    """
+    Raise ValueError if *text* contains an unclosed Markdown code fence.
+
+    A well-formed document has an even number of triple-backtick (```) markers:
+    each opening fence (```python, ```bash, etc.) is closed by a bare ```.
+    An odd count means the LLM was cut off mid-block — typically caused by
+    API safety-filter truncation or hitting max_tokens mid-code-block.
+    """
+    fence_count = len(_re.findall(r"^```", text, _re.MULTILINE))
+    if fence_count % 2 != 0:
+        raise ValueError(
+            f"Truncated output detected: {fence_count} code fence marker(s) found "
+            f"(expected an even number). Probable API truncation or safety block."
+        )
+
+
 # ── Optional prompt cache ─────────────────────────────────────────────────────
 # PromptCache is imported lazily so llm_client works even without the memory
 # module.  Pass use_cache=False to bypass it entirely.
 _CACHE_NOT_INITIALIZED = object()   # sentinel: "never attempted"
 _CACHE_UNAVAILABLE = object()       # sentinel: "tried and failed"
 _cache_instance = _CACHE_NOT_INITIALIZED
+
+# Fuzzy cache guard: skip similarity-based lookup when the total prompt
+# exceeds this length. With 40k-char corpus extracts the embedding is
+# dominated by the corpus text, causing false-positive matches between
+# prompts that share the same corpus but have different system prompts
+# (e.g., ARCHITECTURE vs CODE_SUGGESTER on the same research run).
+_FUZZY_CACHE_MAX_PROMPT_CHARS = 20_000
 
 import logging as _logging
 _logger = _logging.getLogger(__name__)
@@ -213,32 +241,61 @@ def chat(
         entry = cache.get(cache_prompt, model=model)
         if entry is not None:
             return entry["response"]
-        # 2. Fuzzy hit (high cosine similarity)
-        entry = cache.get_fuzzy(cache_prompt, threshold=cache_fuzzy_threshold, model=model)
-        if entry is not None:
-            return entry["response"]
+        # 2. Fuzzy hit — only for short prompts. Large-corpus prompts (> 20k chars)
+        # produce embeddings dominated by the corpus text, causing false-positive
+        # matches across calls that share the same corpus but use different system
+        # prompts (e.g., ARCHITECTURE vs CODE generation on the same research run).
+        if len(cache_prompt) <= _FUZZY_CACHE_MAX_PROMPT_CHARS:
+            entry = cache.get_fuzzy(cache_prompt, threshold=cache_fuzzy_threshold, model=model)
+            if entry is not None:
+                return entry["response"]
 
-    # ── Real LLM call ─────────────────────────────────────────────────────────
+    # ── Real LLM call with structural validation + retry ──────────────────────
     provider, model_name, inferred_base = parse_model(model)
     effective_base = api_base or inferred_base
 
-    if provider == "anthropic":
-        reply = _chat_anthropic(messages, model_name, max_tokens, temperature)
-    elif provider == "google":
-        reply = _chat_google(messages, model_name, max_tokens, temperature)
-    elif provider == "ollama":
-        reply = _chat_openai_compat(
-            messages, model_name, max_tokens, temperature,
-            base_url=f"{effective_base}/v1",
-            api_key="ollama",
-        )
-    else:
-        # Default: OpenAI
-        reply = _chat_openai_compat(
-            messages, model_name, max_tokens, temperature,
-            base_url=effective_base,
-            api_key=os.getenv("OPENAI_API_KEY", ""),
-        )
+    _MAX_STRUCT_RETRIES = 2
+    reply = ""
+    for struct_attempt in range(_MAX_STRUCT_RETRIES + 1):
+        if provider == "anthropic":
+            reply = _chat_anthropic(messages, model_name, max_tokens, temperature)
+        elif provider == "google":
+            reply = _chat_google(messages, model_name, max_tokens, temperature)
+        elif provider == "ollama":
+            reply = _chat_openai_compat(
+                messages, model_name, max_tokens, temperature,
+                base_url=f"{effective_base}/v1",
+                api_key="ollama",
+            )
+        else:
+            # Default: OpenAI
+            reply = _chat_openai_compat(
+                messages, model_name, max_tokens, temperature,
+                base_url=effective_base,
+                api_key=os.getenv("OPENAI_API_KEY", ""),
+            )
+
+        try:
+            _validate_markdown_fences(reply)
+            break  # output is structurally valid
+        except ValueError as ve:
+            print(
+                f"  ⚠️  Structural validation failed "
+                f"(attempt {struct_attempt + 1}/{_MAX_STRUCT_RETRIES + 1}): {ve}",
+                file=sys.stderr,
+            )
+            # Flush the cache entry so the broken response is never served again
+            if cache is not None:
+                try:
+                    cache.invalidate(cache_prompt, model=model)
+                except Exception:
+                    pass
+            if struct_attempt == _MAX_STRUCT_RETRIES:
+                raise RuntimeError(
+                    f"LLM output failed structural validation after "
+                    f"{_MAX_STRUCT_RETRIES + 1} attempt(s): {ve}"
+                ) from ve
+            print("     Retrying LLM call …", file=sys.stderr)
 
     # ── Cache store ───────────────────────────────────────────────────────────
     if cache is not None:
@@ -450,10 +507,23 @@ def _chat_google(
         genai_types.Content(role="user", parts=[genai_types.Part(text=last_msg)])
     )
 
+    # Disable all safety filters: code generation (os, Path, subprocess, etc.)
+    # frequently triggers false-positive HARM_CATEGORY_DANGEROUS_CONTENT blocks,
+    # which silently truncate the response mid-generation.
+    _BLOCK_NONE_CATEGORIES = [
+        "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "HARM_CATEGORY_HARASSMENT",
+        "HARM_CATEGORY_HATE_SPEECH",
+        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    ]
     cfg = genai_types.GenerateContentConfig(
         system_instruction=system if system else None,
         max_output_tokens=max_tokens,
         temperature=temperature,
+        safety_settings=[
+            genai_types.SafetySetting(category=c, threshold="BLOCK_NONE")
+            for c in _BLOCK_NONE_CATEGORIES
+        ],
     )
 
     last_exc: Exception | None = None

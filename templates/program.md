@@ -1,7 +1,7 @@
 # Research Program: UltimateDocResearcher-Reliability
 
 ## Topic
-Project Rules Generator / .clinerules patterns
+how to improve the skills mechanism and the rules in project-rules-generator
 
 ## Objective
 Analyze the current codebase, historical bugs (Issue #18), and research results to identify gaps in reliability, performance, and API handling. Propose concrete code improvements for the research pipeline.

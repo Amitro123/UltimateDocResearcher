@@ -68,7 +68,9 @@
       "Bash(python -c \"from autoresearch.llm_client import best_available_model; print\\(best_available_model\\(\\)\\)\")",
       "Bash(python -m autoresearch.prepare --corpus data/all_docs_cleaned.txt --max-pairs 30 --use-llm --model gemini-2.5-flash-lite)",
       "Bash(python -m autoresearch.eval --val-path data/val.jsonl --judge-model gemini-2.5-flash-lite --max-samples 2 --output-dir results/sim-eval)",
-      "Bash(python -m autoresearch.research --topic \"Vertex AI Agent Builder indexing errors\" --model gemini-2.5-flash-lite --no-code)"
+      "Bash(python -m autoresearch.research --topic \"Vertex AI Agent Builder indexing errors\" --model gemini-2.5-flash-lite --no-code)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_llm_client.py tests/test_llm_client_extended.py -v)",
+      "Bash(.venv/Scripts/pip.exe install:*)"
     ]
   }
 }

@@ -64,25 +64,26 @@ CORPUS_WINDOW: int = _CFG.get("corpus", {}).get("window", 40_000)
 _EXTERNAL_FRACTION: float = _CFG.get("corpus", {}).get("external_fraction", 0.70)
 
 # Number of code suggestion "blocks" to request
-N_SUGGESTIONS = 5
+N_SUGGESTIONS = 3
 
 SYSTEM_PROMPT = """\
-You are an expert software engineer who bridges research and implementation.
-Given a research corpus extract, identify the most actionable technical \
-concepts and translate them into working Python code examples.
+You are an expert Principal Python Engineer. Your task is to translate research findings into immediately actionable, high-quality Python code.
+You MUST output EXACTLY 3 major code implementation suggestions.
 
-For each concept, provide:
-1. A short title (e.g. "Streaming tool calls with the Anthropic SDK")
-2. 2-3 sentences explaining *when* to use this pattern
-3. A self-contained, runnable Python code snippet (with comments)
-4. One "gotcha" or common mistake to avoid
+For each, strictly use this format:
+## [Title]
+**When to use:** [2-3 sentences explaining exactly when and why to use this pattern]
 
-Format as Markdown with ## headers and ```python blocks.
-Focus on practical, copy-paste-ready code. Avoid vague advice.
-Prefer showing real SDK calls / class structures over pseudocode.
+### Implementation Code
+```python
+# Fully self-contained, completely runnable Python code.
+# NO placeholders, NO pseudocode. Use real SDK calls based on the research.
+```
 
-CRITICAL SAFETY: NEVER generate code that writes to the 'results/' or 'data/' 
-directories in its demo/test blocks. Use print() or dummy objects instead.
+### Anti-Pattern to Avoid
+[Show one explicit coding mistake developers make, and explain exactly why it fails]
+
+Your response MUST ONLY contain these 3 sections in Markdown. Do not include introductory or concluding conversational text. Always finish your output completely.
 """
 
 CORPUS_PROMPT_TEMPLATE = """\
@@ -138,6 +139,7 @@ def _call_llm(
             max_tokens=min(1500 * n_suggestions, 8192),
             temperature=0.3,
             api_base=api_base,
+            use_cache=False,
         )
     except Exception as exc:
         print(f"[code_suggester] LLM call failed: {exc}", file=sys.stderr)
