@@ -72,7 +72,7 @@ class KaggleRunner:
         if not meta_path.exists():
             raise FileNotFoundError(f"kernel-metadata.json not found in {kernel_dir}")
 
-        meta = json.loads(meta_path.read_text())
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta_id = meta['id']
         
         # Avoid double username prefix if metadata already has it
@@ -311,6 +311,10 @@ def generate_kernel_metadata(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description="Trigger Kaggle kernel for autoresearch")
     parser.add_argument("--topic", default="Claude skills optimization")
     parser.add_argument("--iterations", type=int, default=20)

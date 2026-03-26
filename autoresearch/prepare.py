@@ -466,6 +466,10 @@ def _write_jsonl(records: List[dict], path: Path) -> None:
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     parser = argparse.ArgumentParser(description="autoresearch prepare step")
     parser.add_argument("--corpus", default="data/all_docs_cleaned.txt")

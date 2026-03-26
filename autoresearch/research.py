@@ -93,6 +93,10 @@ def _print_package_summary(pkg) -> None:
 
 
 def main() -> int:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(
         description="Generate multi-format research deliverables",
         formatter_class=argparse.RawDescriptionHelpFormatter,

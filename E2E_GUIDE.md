@@ -476,7 +476,7 @@ python -m autoresearch.research \
 
 # Check what input type your corpus would be detected as:
 python -c "
-corpus = open('data/all_docs_cleaned.txt').read()
+corpus = open('data/all_docs_cleaned.txt', encoding='utf-8').read()
 from research_deliverables.classify_input import classify_input
 print(classify_input(corpus))
 "
@@ -611,7 +611,7 @@ python -m autoresearch.eval \
 | Multi-format (no code) | `python -m autoresearch.research --topic "X" --no-code` |
 | **Error-log package** | `python -m autoresearch.research --topic "X" --input-type error_log` |
 | **Paper package** | `python -m autoresearch.research --topic "X" --input-type paper` |
-| Check detected input type | `python -c "from research_deliverables.classify_input import classify_input; print(classify_input(open('data/all_docs_cleaned.txt').read()))"` |
+| Check detected input type | `python -c "from research_deliverables.classify_input import classify_input; print(classify_input(open('data/all_docs_cleaned.txt', encoding='utf-8').read()))"` |
 | Check topic type | `python -c "from research_deliverables.classify_topic import classify_topic; print(classify_topic('topic').research_type)"` |
 | **Score output quality** | `python -m eval.run_eval --input results/code_suggestions.md --judge ollama:llama3.2` |
 | Score any deliverable | `python -m eval.run_eval --input results/<run-id>/RISKS.md --judge ollama:llama3.2` |
@@ -846,7 +846,7 @@ Pay-as-you-go billing on the project in Google Cloud Console.
 `codebase`, or `website`. Check what was detected:
 ```bash
 python -c "
-corpus = open('data/all_docs_cleaned.txt').read()
+corpus = open('data/all_docs_cleaned.txt', encoding='utf-8').read()
 from research_deliverables.classify_input import classify_input
 print(classify_input(corpus))
 "

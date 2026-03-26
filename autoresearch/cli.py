@@ -203,6 +203,10 @@ def _step_eval(args) -> bool:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(
         prog="python -m autoresearch.cli",
         description="UltimateDocResearcher — single-command research pipeline",

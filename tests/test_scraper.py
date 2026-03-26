@@ -58,11 +58,19 @@ class TestScrapeTopicSync(unittest.TestCase):
         session.__aexit__ = AsyncMock(return_value=False)
         return session
 
+    @staticmethod
+    def _close_and_return(value):
+        """Mock side_effect: close the coroutine to avoid 'never awaited' warnings."""
+        def _inner(coro):
+            coro.close()
+            return value
+        return _inner
+
     def test_returns_string_in_normal_context(self):
         """In a plain synchronous context, asyncio.run() is called and returns its result."""
         # Patch dispatch layer: no running loop → asyncio.run() is the path taken
         with patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")), \
-             patch("asyncio.run", return_value="mocked output") as mock_run:
+             patch("asyncio.run", side_effect=self._close_and_return("mocked output")) as mock_run:
             result = scrape_topic("AI engineering", n_google=0, n_reddit=0, n_github=0)
         mock_run.assert_called_once()
         self.assertIsInstance(result, str)
@@ -70,7 +78,7 @@ class TestScrapeTopicSync(unittest.TestCase):
     def test_no_error_when_no_api_keys(self):
         """With no API keys or subreddits, scrape_topic() returns a string without error."""
         with patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")), \
-             patch("asyncio.run", return_value=""):
+             patch("asyncio.run", side_effect=self._close_and_return("")):
             result = scrape_topic(
                 "test topic",
                 n_google=0,
@@ -113,11 +121,12 @@ class TestScrapeTopicSync(unittest.TestCase):
         When asyncio.get_running_loop() raises RuntimeError (no running loop),
         scrape_topic() must call asyncio.run() directly.
         """
-        async def _fake_run(coro):
+        def _close_and_return(coro):
+            coro.close()  # prevent "coroutine was never awaited" warning
             return "direct result"
 
         with patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")), \
-             patch("asyncio.run", side_effect=lambda coro: "direct result") as mock_run, \
+             patch("asyncio.run", side_effect=_close_and_return) as mock_run, \
              patch("aiohttp.ClientSession", return_value=self._make_mock_session()):
             result = scrape_topic("test topic", n_google=0, n_reddit=0, n_github=0)
 

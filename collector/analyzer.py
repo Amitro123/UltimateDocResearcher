@@ -15,9 +15,18 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+# Ensure emoji in print() doesn't crash narrow-encoding consoles (e.g. Windows cp1252)
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 
 @dataclass
@@ -491,6 +500,10 @@ def _source_breakdown(stats: List[DocStats]) -> dict:
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     parser = argparse.ArgumentParser(description="Analyze and filter research corpus")
     parser.add_argument("--input", default="data/all_docs.txt")

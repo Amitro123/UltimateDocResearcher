@@ -495,6 +495,10 @@ def _git_commit_results(iteration: int, metrics: dict) -> None:
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="unsloth/Llama-3.2-3B-Instruct-bnb-4bit")

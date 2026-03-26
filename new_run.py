@@ -107,7 +107,14 @@ def _clear_prompt_cache(dry_run: bool) -> None:
         size = PROMPT_CACHE_DB.stat().st_size
         print(f"\n🧹  Clearing prompt cache ({size / 1024:.1f} KB): {PROMPT_CACHE_DB.name}")
         if not dry_run:
-            PROMPT_CACHE_DB.unlink()
+            try:
+                PROMPT_CACHE_DB.unlink()
+            except PermissionError:
+                print(
+                    f"  ⚠️  Could not delete {PROMPT_CACHE_DB.name} — file is in use "
+                    f"(close the dashboard / any open SQLite connections first).\n"
+                    f"     Cache NOT cleared; stale responses may bleed into this run."
+                )
         else:
             print(f"    (dry) would delete {PROMPT_CACHE_DB}")
         cleared_any = True
@@ -117,7 +124,10 @@ def _clear_prompt_cache(dry_run: bool) -> None:
         size = PROMPT_CACHE_JSONL.stat().st_size
         print(f"    Also removing legacy JSONL cache ({size / 1024:.1f} KB): {PROMPT_CACHE_JSONL.name}")
         if not dry_run:
-            PROMPT_CACHE_JSONL.unlink()
+            try:
+                PROMPT_CACHE_JSONL.unlink()
+            except PermissionError:
+                print(f"  ⚠️  Could not delete {PROMPT_CACHE_JSONL.name} — file is in use.")
         else:
             print(f"    (dry) would delete {PROMPT_CACHE_JSONL}")
         cleared_any = True
@@ -152,6 +162,10 @@ def _update_template(topic: str, dry_run: bool) -> None:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(
         description="Reset workspace before a new research run."
     )

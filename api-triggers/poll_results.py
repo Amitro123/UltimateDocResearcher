@@ -41,7 +41,7 @@ def print_results_summary(tsv_path: str = "results/results.tsv") -> None:
     if not path.exists():
         print(f"[results] No results.tsv at {tsv_path}")
         return
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     if len(lines) < 2:
         print("[results] No data rows yet")
         return
@@ -61,6 +61,10 @@ def print_results_summary(tsv_path: str = "results/results.tsv") -> None:
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser()
     parser.add_argument("--slug", required=True, help="Kaggle kernel slug (user/kernel-id)")
     parser.add_argument("--poll-interval", type=int, default=60)

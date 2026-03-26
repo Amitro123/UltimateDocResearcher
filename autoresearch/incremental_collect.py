@@ -29,7 +29,6 @@ Or as a CLI:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import hashlib
 import json
 import os
@@ -284,7 +283,7 @@ class IncrementalCollector:
         before_size = docs_path.stat().st_size if docs_path.exists() else 0
 
         try:
-            asyncio.run(collector.run())
+            collector.run()
         except Exception as exc:
             self._log(f"⚠️  Collector error: {exc} — continuing with partial results")
 
@@ -310,6 +309,13 @@ class IncrementalCollector:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def _cli() -> int:
+    import sys as _sys
+    if hasattr(_sys.stdout, 'reconfigure'):
+        try:
+            _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            _sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
     parser = argparse.ArgumentParser(
         description="Incremental document collection for UltimateDocResearcher",
     )

@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "ultimate-doc-researcher"
@@ -23,6 +23,11 @@ dependencies = [
     "tqdm>=4.66",
     "python-dotenv>=1.0",
     "pandas>=2.1",
+    "anthropic>=0.25",
+    "google-genai>=1.0",
+    "streamlit>=1.32",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
 ]
 
 [project.scripts]
@@ -33,7 +38,17 @@ trigger-kaggle = "api-triggers.trigger_kaggle:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["collector*", "autoresearch*", "api-triggers*", "templates*"]
+include = [
+    "collector*",
+    "autoresearch*",
+    "api-triggers*",
+    "templates*",
+    "chat*",
+    "dashboard*",
+    "eval*",
+    "memory*",
+    "research_deliverables*",
+]
 
 [tool.ruff]
 line-length = 100

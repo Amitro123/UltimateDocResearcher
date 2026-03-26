@@ -381,7 +381,7 @@ python -m autoresearch.research --topic "RAG architecture" --no-code
 
 # Check what input type your corpus would get before running:
 python -c "
-corpus = open('data/all_docs_cleaned.txt').read()
+corpus = open('data/all_docs_cleaned.txt', encoding='utf-8').read()
 from research_deliverables.classify_input import classify_input
 print(classify_input(corpus))
 "

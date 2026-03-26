@@ -26,6 +26,14 @@ import json
 import re
 import sys
 import textwrap
+
+# Ensure emoji in print() doesn't crash narrow-encoding consoles (e.g. Windows cp1252)
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path

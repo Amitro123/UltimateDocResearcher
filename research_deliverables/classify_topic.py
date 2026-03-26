@@ -134,8 +134,8 @@ def _build_deliverable_set(rtype: ResearchType, topic: str) -> DeliverableSet:
         return DeliverableSet(
             research_type="code",
             deliverables=[
-                "SUMMARY.md", "ARCHITECTURE.md", "PLAN.md",
-                "RISKS.md", "BENCHMARKS.md",
+                "SUMMARY.md", "ARCHITECTURE.md", "IMPLEMENTATION.md",
+                "RISKS.md", "BENCHMARKS.md", "NEXT_STEPS.md",
             ],
             focus_hint=(
                 "Focus on concrete, copy-paste-ready code patterns, SDK usage, "
@@ -174,8 +174,8 @@ def _build_deliverable_set(rtype: ResearchType, topic: str) -> DeliverableSet:
         return DeliverableSet(
             research_type="process",
             deliverables=[
-                "SUMMARY.md", "ARCHITECTURE.md", "PLAN.md",
-                "RISKS.md", "BENCHMARKS.md",
+                "SUMMARY.md", "ARCHITECTURE.md", "IMPLEMENTATION.md",
+                "RISKS.md", "BENCHMARKS.md", "NEXT_STEPS.md",
             ],
             focus_hint=(
                 "Focus on step-by-step workflows, tooling choices, evaluation "

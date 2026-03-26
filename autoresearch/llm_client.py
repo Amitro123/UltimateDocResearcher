@@ -589,6 +589,10 @@ def best_available_model(prefer_ollama_model: str = "llama3.2") -> str:
 # ── CLI (quick test / model check) ───────────────────────────────────────────
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     # Windows CP1252 terminals can't encode emoji — ensure UTF-8 output
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
