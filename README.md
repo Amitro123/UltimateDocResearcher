@@ -1,6 +1,6 @@
 ## 2-minute start
 
-No API key. No Ollama. No GPU. Just Python 3.10+.
+No API key. No Ollama. No GPU. Just Python 3.11+.
 
 ```bash
 git clone https://github.com/Amitro123/UltimateDocResearcher

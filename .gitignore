@@ -169,5 +169,15 @@ test_output.txt
 test_results.txt
 .env.example
 .claude/settings.local.json
-.claude/settings.local.json
-.claude/settings.local.json
+
+# Generated dev-session artifacts (not part of the published project)
+issues.json
+issues.md
+llm_client_test_output.txt
+pytest_output.txt
+test_out_utf8.txt
+eval_spec_err.txt
+walkthrough.md
+task.md
+*.txt
+!requirements.txt
