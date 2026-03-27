@@ -47,7 +47,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+# Note: sys.path.insert was removed — the package is installed via
+# `pip install -e .` so all imports resolve through the normal package
+# mechanism without path manipulation.
 
 
 # ── Step runners ──────────────────────────────────────────────────────────────
@@ -110,28 +112,28 @@ def _step_analyze(args) -> bool:
 
 
 def _step_prepare(args) -> bool:
-    """Generate Q&A pairs."""
+    """Generate Q&A pairs by calling autoresearch.prepare directly.
+
+    Previously this spawned a subprocess, which duplicated Python startup
+    overhead and buried error tracebacks in child-process output. Calling
+    the module's public function directly gives us proper exception propagation
+    and a single-process stack trace when something goes wrong.
+    """
     print("\n[cli] Step 3/4 — Prepare Q&A")
     corpus_path = ROOT / args.corpus
     if not corpus_path.exists():
-        print(f"[cli]   ⚠️  Corpus not found, skipping prepare")
+        print(f"[cli]   \u26a0\ufe0f  Corpus not found at {corpus_path}, skipping prepare")
         return False
     try:
-        import subprocess
-        cmd = [
-            sys.executable, "-m", "autoresearch.prepare",
-            "--corpus", str(corpus_path),
-            "--output-dir", str(ROOT / args.data_dir),
-            "--max-pairs", str(args.max_pairs),
-        ]
-        if args.model:
-            cmd += ["--model", args.model]
-        result = subprocess.run(cmd, cwd=str(ROOT))
-        if result.returncode != 0:
-            print("[cli]   ⚠️  Prepare exited with errors")
-            return False
+        from autoresearch.prepare import prepare as _prepare
+        _prepare(
+            corpus_path=str(corpus_path),
+            output_dir=str(ROOT / args.data_dir),
+            max_pairs=args.max_pairs,
+            llm_model=args.model or "",
+        )
     except Exception as exc:
-        print(f"[cli]   ⚠️  Prepare error: {exc}")
+        print(f"[cli]   \u26a0\ufe0f  Prepare error: {exc}")
         return False
     return True
 

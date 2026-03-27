@@ -78,9 +78,26 @@ def _render_template(template_name: str, context: dict) -> str:
 
 # ── LLM call helper ───────────────────────────────────────────────────────────
 
+# Module-level flag that lets generate_deliverables() enable raise_on_error
+# for all child generators without changing every function signature.
+# Use the _raising_llm_errors() context manager in generate_deliverables.
+_RAISE_LLM_ERRORS: bool = False
+
+
 def _llm_chat(system: str, user: str, model: Optional[str] = None,
-              max_tokens: int = 2048, use_cache: bool = True) -> str:
-    """Call the LLM. Returns plain string response."""
+              max_tokens: int = 2048, use_cache: bool = True,
+              raise_on_error: bool = False) -> str:
+    """Call the LLM. Returns plain string response.
+
+    Args:
+        raise_on_error: When True, re-raises LLM exceptions instead of
+            returning a placeholder string. Set this when the caller already
+            wraps the call in a try/except (e.g. generate_deliverables) so
+            that real errors propagate to pkg.errors rather than being written
+            silently to the output file as placeholder text.
+    """
+    import research_deliverables.generators as _self
+    effective_raise = raise_on_error or _self._RAISE_LLM_ERRORS
     try:
         from autoresearch.llm_client import chat, best_available_model
         effective_model = model or best_available_model()
@@ -92,6 +109,8 @@ def _llm_chat(system: str, user: str, model: Optional[str] = None,
             use_cache=use_cache,
         )
     except Exception as exc:
+        if effective_raise:
+            raise
         return f"[LLM unavailable: {exc}]\n\n_Run with a configured LLM to generate this section._"
 
 
@@ -127,6 +146,68 @@ def _extract_or_default(sections: dict[str, str], *keys: str,
         if norm in sections:
             return sections[norm]
     return default
+
+
+def _warn_if_sparse_sections(
+    deliverable_name: str,
+    sections: dict[str, str],
+    expected_keys: list[str],
+) -> None:
+    """Warn when fewer than half the expected ## sections were parsed.
+
+    This surfaces LLM format drift at runtime instead of silently writing
+    files full of '_No content generated._' placeholders.
+    """
+    # Positional aliases (_section_N) don't count toward expected coverage
+    content_keys = {k for k in sections if not k.startswith("_section_")}
+    if not expected_keys:
+        return
+    normalized_expected = [k.lower().replace(" ", "_") for k in expected_keys]
+    found = sum(1 for k in normalized_expected if k in content_keys)
+    pct = int(found / len(normalized_expected) * 100)
+    if pct < 50:
+        print(
+            f"\u26a0\ufe0f  [deliverables] {deliverable_name}: only {pct}% of expected sections "
+            f"parsed ({found}/{len(normalized_expected)}). "
+            "The LLM may have deviated from the required ## heading format.",
+            file=sys.stderr,
+        )
+
+
+def _try_json_extract(text: str, keys: list[str]) -> Optional[dict[str, str]]:
+    """Attempt to extract a JSON object from the LLM response.
+
+    Looks for a ```json ... ``` fenced block or a bare {...} object.
+    Returns a dict of key → value strings if all required keys are present,
+    or None to signal the caller should fall back to Markdown regex parsing.
+
+    This is an additive optimisation — when the LLM honours JSON mode, it
+    yields cleaner section content than regex heading extraction. When it
+    doesn't, the existing _extract_sections() fallback takes over.
+    """
+    # Try fenced block first
+    fence_match = re.search(r"```json\s*([\s\S]+?)```", text, re.IGNORECASE)
+    candidate = fence_match.group(1).strip() if fence_match else text.strip()
+
+    # Find the first '{' to handle leading prose before JSON
+    brace = candidate.find("{")
+    if brace >= 0:
+        candidate = candidate[brace:]
+
+    try:
+        data = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    # All required keys must be present
+    if not all(k in data for k in keys):
+        return None
+
+    # Coerce all values to strings
+    return {k: str(v) for k, v in data.items()}
 
 
 # ── Per-deliverable system prompts ────────────────────────────────────────────
@@ -453,6 +534,10 @@ def generate_summary(
                         deliverable_set.focus_hint)
     raw = _llm_chat(_SUMMARY_SYSTEM, user, model=model, max_tokens=1024)
     sections = _extract_sections(raw)
+    _warn_if_sparse_sections(
+        "SUMMARY.md", sections,
+        ["Overview", "Key Findings", "Recommended Next Action"],
+    )
 
     from research_deliverables.classify_topic import template_for
     return _render_template(template_for("SUMMARY.md"), {
@@ -958,10 +1043,12 @@ def generate_deliverables(
     files: dict[str, Path] = {}
     errors: dict[str, str] = {}
 
+    import research_deliverables.generators as _gen_module
     for deliverable_name in deliverable_set.deliverables:
         gen_fn = _GENERATORS.get(deliverable_name)
         if gen_fn is None:
             continue
+        _gen_module._RAISE_LLM_ERRORS = True
         try:
             content = gen_fn(
                 topic=topic,
@@ -981,6 +1068,8 @@ def generate_deliverables(
             errors[deliverable_name] = str(exc)
             print(f"[deliverables] ❌ {deliverable_name}: {exc}", file=sys.stderr)
             traceback.print_exc()
+        finally:
+            _gen_module._RAISE_LLM_ERRORS = False
 
     # Code suggestions (always generated into CODE/)
     if include_code:

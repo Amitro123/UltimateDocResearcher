@@ -27,6 +27,8 @@ from research_deliverables.generators import (
     _extract_sections,
     _extract_or_default,
     _llm_chat,
+    _warn_if_sparse_sections,
+    _try_json_extract,
     generate_deliverables,
 )
 
@@ -369,11 +371,125 @@ Start implementing.
                     include_code=False,
                 )
 
-        # Package is returned even with LLM errors
+        # Package is always returned — errors must not crash the caller
         self.assertIsInstance(pkg, DeliverablePackage)
-        # Files should still be written (with fallback content)
-        self.assertGreater(len(pkg.files), 0)
+        # Errors must be recorded in pkg.errors (not silently swallowed)
+        self.assertGreater(len(pkg.errors), 0,
+                           "LLM failures must land in pkg.errors, not be swallowed")
 
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ── _llm_chat raise_on_error ──────────────────────────────────────────────────
+
+class TestLlmChatRaiseOnError(unittest.TestCase):
+
+    def test_raises_when_raise_on_error_true(self):
+        """raise_on_error=True must re-raise instead of returning placeholder."""
+        with patch("autoresearch.llm_client.chat", side_effect=ConnectionError("down")):
+            with self.assertRaises(ConnectionError):
+                _llm_chat(
+                    system="sys",
+                    user="user",
+                    model="ollama:llama3.2",
+                    raise_on_error=True,
+                )
+
+    def test_returns_placeholder_by_default(self):
+        """Default behaviour (raise_on_error=False) must still return a string."""
+        with patch("autoresearch.llm_client.chat", side_effect=ConnectionError("down")):
+            result = _llm_chat(
+                system="sys",
+                user="user",
+                model="ollama:llama3.2",
+            )
+        self.assertIn("LLM unavailable", result)
+        self.assertIsInstance(result, str)
+
+
+# ── _warn_if_sparse_sections ──────────────────────────────────────────────────
+
+class TestWarnIfSparseSections(unittest.TestCase):
+
+    def test_no_warning_when_all_sections_found(self):
+        sections = {"overview": "x", "key_findings": "y", "recommended_next_action": "z"}
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            _warn_if_sparse_sections(
+                "TEST.md", sections,
+                ["Overview", "Key Findings", "Recommended Next Action"],
+            )
+            self.assertEqual(mock_err.getvalue(), "")
+
+    def test_warning_when_below_50_pct(self):
+        """Only 1 out of 3 expected sections present → must warn."""
+        sections = {"overview": "text"}
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            _warn_if_sparse_sections(
+                "SUMMARY.md", sections,
+                ["Overview", "Key Findings", "Recommended Next Action"],
+            )
+            self.assertIn("33%", mock_err.getvalue())
+
+    def test_no_warning_on_empty_expected_keys(self):
+        """Empty expected list must not raise or warn."""
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            _warn_if_sparse_sections("TEST.md", {"a": "b"}, [])
+            self.assertEqual(mock_err.getvalue(), "")
+
+    def test_positional_aliases_not_counted_as_content(self):
+        """_section_N keys are positional aliases and must not count toward coverage."""
+        sections = {"_section_0": "x", "_section_1": "y"}
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            _warn_if_sparse_sections(
+                "TEST.md", sections,
+                ["Overview", "Key Findings"],
+            )
+            self.assertIn("0%", mock_err.getvalue())
+
+
+# ── _try_json_extract ─────────────────────────────────────────────────────────
+
+class TestTryJsonExtract(unittest.TestCase):
+
+    def test_extracts_from_fenced_block(self):
+        text = '```json\n{"overview": "hello", "key_findings": "world"}\n```'
+        result = _try_json_extract(text, ["overview", "key_findings"])
+        self.assertIsNotNone(result)
+        self.assertEqual(result["overview"], "hello")
+
+    def test_extracts_bare_json_object(self):
+        text = '{"overview": "hello", "key_findings": "world"}'
+        result = _try_json_extract(text, ["overview", "key_findings"])
+        self.assertIsNotNone(result)
+
+    def test_returns_none_on_missing_keys(self):
+        text = '{"overview": "hello"}'
+        result = _try_json_extract(text, ["overview", "key_findings"])
+        self.assertIsNone(result)
+
+    def test_returns_none_on_invalid_json(self):
+        result = _try_json_extract("not json at all", ["overview"])
+        self.assertIsNone(result)
+
+    def test_returns_none_on_empty_text(self):
+        result = _try_json_extract("", ["overview"])
+        self.assertIsNone(result)
+
+    def test_coerces_values_to_strings(self):
+        text = '{"score": 42, "label": true}'
+        result = _try_json_extract(text, ["score", "label"])
+        self.assertIsNotNone(result)
+        self.assertEqual(result["score"], "42")
+        self.assertEqual(result["label"], "True")
+
+    def test_handles_prose_before_json(self):
+        text = 'Here is the result:\n{"overview": "content", "key_findings": "data"}'
+        result = _try_json_extract(text, ["overview", "key_findings"])
+        self.assertIsNotNone(result)
+
